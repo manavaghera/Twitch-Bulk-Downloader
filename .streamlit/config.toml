@@ -1,0 +1,32 @@
+# Clip Studio look. Streamlit reads this when started from the project folder,
+# which is what start_web_ui.bat does.
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#9146FF"
+backgroundColor = "#0E0E10"
+secondaryBackgroundColor = "#1A1A1F"
+textColor = "#EFEFF1"
+borderColor = "#2A2A31"
+showWidgetBorder = true
+baseRadius = "10px"
+buttonRadius = "10px"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFontWeights = [800, 700, 700, 600, 600, 600]
+codeFont = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+codeFontSize = "12.5px"
+greenColor = "#00D68F"
+violetColor = "#9146FF"
+dataframeHeaderBackgroundColor = "#16161B"
+
+[theme.sidebar]
+backgroundColor = "#121216"
+secondaryBackgroundColor = "#1C1C22"
+borderColor = "#24242B"

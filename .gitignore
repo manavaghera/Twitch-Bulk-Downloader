@@ -1,0 +1,41 @@
+# Credentials, accounts, cached tokens and run history live here - never commit them
+data/
+config.json
+users.json
+token_cache.json
+
+# Hosted secrets and environment files
+.streamlit/secrets.toml
+.env
+.env.*
+*.pem
+*.key
+
+# Downloaded clips and zips
+downloads/
+*.mp4
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Web UI virtual environment
+.venv/
+venv/
+
+# Local AI-assistant / tooling state
+.claude/
+.claude-flow/
+.swarm/
+
+# OS and editor clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log
+*.tmp
