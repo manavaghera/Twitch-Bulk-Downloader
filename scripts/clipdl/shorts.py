@@ -27,13 +27,12 @@ import subprocess
 import sys
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import captions, facecams
+from . import branding, captions, facecams
 from .config import STOP
 from .download import name_tail
-from .util import say
+from .util import say, thread_pool
 
 WIDTH, HEIGHT = 1080, 1920
 SHORTS_FOLDER = "Shorts"
@@ -90,10 +89,11 @@ def short_path(video_path):
     return video_path.parent / SHORTS_FOLDER / video_path.name
 
 
-def make_short(source, target, style="blur", box=None, caption_file=None):
+def make_short(source, target, style="blur", box=None, caption_file=None, brand=None):
     """Convert one clip. Returns None on success, or a short reason on failure.
 
-    `box` is the camera for the split look; `caption_file` an .ass file to burn in.
+    `box` is the camera for the split look; `caption_file` an .ass file to burn in;
+    `brand` the logo, hook line, intro and outro from branding.for_short().
     """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -102,15 +102,24 @@ def make_short(source, target, style="blur", box=None, caption_file=None):
     partial = target.with_name(target.stem + ".part.mp4")
     graph = split_filter(box) if style == "split" and box else FILTERS.get(style, FILTERS["blur"])
     out_label = "[v]"
+    inputs = ["-i", str(Path(source).resolve())]
+    brand = brand or {}
+    if brand.get("overlay"):
+        logo, position, logo_width, opacity = brand["overlay"]
+        inputs += ["-i", str(Path(logo).resolve())]
+        graph += (";[1:v]scale=%d:-1,format=rgba,colorchannelmixer=aa=%.2f[lg];"
+                  "[v][lg]overlay=%s[vl]" % (logo_width, opacity, position))
+        out_label = "[vl]"
+    subtitles = [s for s in (brand.get("hook"), caption_file) if s]
     workdir = None
-    if caption_file:
+    for n, sub in enumerate(subtitles):
         # ffmpeg's subtitles filter trips over Windows paths ("C:"), so it is run
-        # from the captions' folder and given the bare file name.
-        workdir = str(Path(caption_file).parent)
-        graph += ";[v]subtitles=filename=%s[vc]" % Path(caption_file).name
-        out_label = "[vc]"
+        # from the captions' folder and given the bare file names.
+        workdir = str(Path(sub).parent)
+        graph += ";%ssubtitles=filename=%s[vs%d]" % (out_label, Path(sub).name, n)
+        out_label = "[vs%d]" % n
     command = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(Path(source).resolve()),
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y"] + inputs + [
         "-filter_complex", graph,
         "-map", out_label, "-map", "0:a?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
@@ -120,7 +129,8 @@ def make_short(source, target, style="blur", box=None, caption_file=None):
     # No console window flashing up for every clip on Windows.
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        done = subprocess.run(command, capture_output=True, text=True, cwd=workdir,
+        done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", cwd=workdir,
                               timeout=CONVERT_TIMEOUT, creationflags=flags)
     except subprocess.TimeoutExpired:
         partial.unlink(missing_ok=True)
@@ -131,6 +141,9 @@ def make_short(source, target, style="blur", box=None, caption_file=None):
         partial.unlink(missing_ok=True)
         last = (done.stderr or "").strip().splitlines()
         return "ffmpeg failed: %s" % (last[-1][:120] if last else "exit %d" % done.returncode)
+    problem = branding.wrap(partial, brand)
+    if problem:
+        say("  Intro/outro left off %s (%s)" % (target.name, problem))
     partial.replace(target)
     return None
 
@@ -206,15 +219,22 @@ def convert_all(jobs, manifest, output, style, workers=2, with_captions=False):
                                           "split": "facecam + gameplay"}.get(style, style),
                ", with captions" if with_captions else ""))
     counter, lock, warned = [0], threading.Lock(), set()
-    caption_dir = tempfile.mkdtemp(prefix="clipdl-captions-") if with_captions else None
+    brand_config = branding.settings()
+    wants_folder = with_captions or (brand_config["enabled"] and brand_config["hook_on"])
+    caption_dir = tempfile.mkdtemp(prefix="clipdl-captions-") if wants_folder else None
+    brand = branding.for_short(caption_dir, brand_config) if todo else None
+    if brand:
+        say("Branding  : %s" % ", ".join(name for name, on in (
+            ("logo", brand["overlay"]), ("hook line", brand["hook"]),
+            ("intro", brand["intro"]), ("outro", brand["outro"])) if on) or "on (nothing set)")
 
     def one(item):
         job, source = item
         if STOP.is_set():
             return None
         look, box = _look(job, style, warned)
-        ass = _captioned(job, source, caption_dir) if caption_dir else None
-        reason = make_short(source, job.short, look, box, ass)
+        ass = _captioned(job, source, caption_dir) if with_captions else None
+        reason = make_short(source, job.short, look, box, ass, brand)
         if ass:
             ass.unlink(missing_ok=True)
         with lock:
@@ -226,7 +246,7 @@ def convert_all(jobs, manifest, output, style, workers=2, with_captions=False):
             say("[%d/%d] Short ready: %s" % (counter[0], len(todo), source.name))
         return reason
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with thread_pool(workers) as pool:
         failed = sum(1 for reason in pool.map(one, todo) if reason)
     if caption_dir:
         shutil.rmtree(caption_dir, ignore_errors=True)

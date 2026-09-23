@@ -6,22 +6,34 @@ import re
 import sys
 import threading
 
-from .config import MAX_TITLE_CHARS
+from concurrent.futures import ThreadPoolExecutor
+
+from .config import MAX_TITLE_CHARS, current_kind, set_kind
 
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
 _print_lock = threading.Lock()
 
-# The web UI sets this to a function that collects every line for the page to
-# show. It stays None on the command line, where the console is enough.
-_output_sink = None
+# The web UI sets a function per kind of job (download, trends) that collects
+# every line for the page to show; say() picks the one of the thread it runs
+# on, so two jobs side by side never mix their logs. Empty on the command line,
+# where the console is enough (or one sink for kind None, like the Autopilot's log).
+_sinks = {}
 
 
-def set_output_sink(sink):
-    """Send every say() to `sink(text, end)` as well as the console, or stop (None)."""
-    global _output_sink
-    _output_sink = sink
+def set_output_sink(sink, kind=None):
+    """Send say() calls of `kind` threads to `sink(text, end)` as well, or stop (None)."""
+    if sink is None:
+        _sinks.pop(kind, None)
+    else:
+        _sinks[kind] = sink
+
+
+def thread_pool(workers):
+    """A thread pool whose threads work for the same job as the calling thread."""
+    return ThreadPoolExecutor(max_workers=workers, initializer=set_kind,
+                              initargs=(current_kind(),))
 
 
 def say(message="", end="\n"):
@@ -33,8 +45,9 @@ def say(message="", end="\n"):
             # Last resort if the console still refuses a character.
             print(str(message).encode("ascii", "replace").decode("ascii"), end=end,
                   flush=True)
-        if _output_sink is not None:
-            _output_sink(str(message), end)
+        sink = _sinks.get(current_kind()) or _sinks.get(None)
+        if sink is not None:
+            sink(str(message), end)
 
 
 def ask(prompt):

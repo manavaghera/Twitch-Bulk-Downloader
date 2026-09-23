@@ -9,13 +9,13 @@ the moment to grab it: before the other clip channels repost it.
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from . import permissions, stats_db
 from .api import TwitchAPI, TwitchError
 from .config import MANIFEST_FILE, VELOCITY_FLOOR_HOURS
-from .util import load_json
+from .filter import classify_clip
+from .util import load_json, thread_pool
 from .web import is_game, normalize_name
 
 
@@ -71,7 +71,7 @@ def scan(client_id, client_secret, games=50, hours=24, workers=6):
     now = datetime.now(timezone.utc).replace(microsecond=0)
     stamp = "%Y-%m-%dT%H:%M:%SZ"
     started_at = (now - timedelta(hours=hours)).strftime(stamp)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with thread_pool(workers) as pool:
         batches = list(pool.map(lambda g: _clips_of(api, g, started_at, now.strftime(stamp)),
                                 picked))
     have = set(((load_json(MANIFEST_FILE, {}) or {}).get("clips") or {}))
@@ -92,16 +92,20 @@ def scan(client_id, client_secret, games=50, hours=24, workers=6):
             by_name.get((clip.get("broadcaster_name") or "").lower())
         clip["have"] = clip.get("id") in have
         clip["spam"] = is_spam(clip)
+        clip["talk"] = classify_clip(clip, "")[0] == "talk"
         clips.append(clip)
     clips.sort(key=lambda c: c["per_hour"], reverse=True)
     return {"clips": clips, "games": len(picked), "scanned_at": time.time(), "hours": hours}
 
 
 def filtered(result, language="en", min_views=0, hide_have=True, hide_blocked=True,
-             hide_spam=True):
+             hide_spam=True, hide_talk=True):
     out = []
     for clip in result["clips"]:
         if hide_spam and clip.get("spam"):
+            continue
+        if hide_talk and (clip["talk"] if "talk" in clip
+                          else classify_clip(clip, "")[0] == "talk"):
             continue
         if language and (clip.get("language") or "").split("-")[0] != language:
             continue

@@ -6,10 +6,11 @@ from pathlib import Path
 
 import streamlit as st
 
-from . import captions, jobs, radar, ui_login, ui_theme
+from . import captions, jobs, radar, reposts, ui_login, ui_theme, yt_quota
 from .folders import saved_folder
 from .session import download_clips
 from .ui_common import busy_elsewhere, progress_panel, start_job
+from .trends_cli import youtube_key
 from .ui_downloader import STYLE_LABELS
 from .util import sanitize
 
@@ -49,18 +50,21 @@ def render(api):
         language = cols[2].segmented_control("Language", ("en", ""), default="en",
                                              format_func=lambda v: "English" if v else "Any",
                                              required=True, key="rad_lang")
-        cols = st.columns([1.4, 1, 1, 1], vertical_alignment="bottom")
+        cols = st.columns([1.4, 1, 1, 1, 1], vertical_alignment="bottom")
         min_views = cols[0].select_slider("At least this many views", [0, 100, 500, 1000, 5000],
                                           value=500, key="rad_min")
         hide_have = cols[1].toggle("Hide clips I have", value=True, key="rad_have")
         hide_spam = cols[2].toggle("Hide ads & spam", value=True, key="rad_spam",
                                    help="Clips whose titles advertise a website or cheats.")
-        if cols[3].button("Scan again", icon=":material/refresh:", width="stretch"):
+        gameplay = cols[3].toggle("Gameplay only", value=True, key="rad_play",
+                                  help="Hides clips of chatting, reacting or a caster desk - "
+                                       "and skips them when downloading, like a normal run.")
+        if cols[4].button("Scan again", icon=":material/refresh:", width="stretch"):
             st.session_state["rad_nonce"] = time.time()
     result = cached_scan(api.client_id, api.client_secret, games, hours,
                          st.session_state.get("rad_nonce", 0))
     clips = radar.filtered(result, language, min_views, hide_have, hide_blocked=True,
-                           hide_spam=hide_spam)
+                           hide_spam=hide_spam, hide_talk=gameplay)
     age = (time.time() - result["scanned_at"]) / 60
     if not clips:
         ui_theme.empty_state("🔭", "Nothing matches", "Lower the minimum views or widen "
@@ -89,17 +93,18 @@ def render(api):
             clip.get("broadcaster_name"), clip["game_name"], _fmt(clip.get("view_count")),
             ("%.0fh" % clip["age_hours"]) if clip["age_hours"] >= 1 else
             "%d min" % (clip["age_hours"] * 60)),
-        "chips": [PERMISSION_CHIPS[clip["permission"]]] if clip.get("permission") in
-        PERMISSION_CHIPS else [("permission not checked", "cs-move")],
+        "chips": ([PERMISSION_CHIPS[clip["permission"]]] if clip.get("permission") in
+                  PERMISSION_CHIPS else [("permission not checked", "cs-move")])
+        + _repost_chip(clip),
         "value": _fmt(clip["per_hour"]), "value_sub": "views / hour",
         "bar": clip["per_hour"] / top_speed * 100}
         for i, clip in enumerate(shown, 1)], wide=True)
     st.caption("Click a title to watch it on Twitch. Mark streamers Allowed or Don't use on "
                "the Streamers page - reposting without permission risks copyright strikes.")
-    download_box(shown)
+    download_box(api, shown, gameplay)
 
 
-def download_box(shown):
+def download_box(api, shown, gameplay=True):
     job = jobs.latest("download")
     with st.container(border=True, key="card_radar_dl"):
         ui_theme.step("⬇️", "Grab clips", "Downloads land in a 'Clip radar' folder, each "
@@ -126,12 +131,13 @@ def download_box(shown):
                                   key="rad_style", disabled=output == "video")
         with_captions = cols[2].toggle("Captions", value=False, key="rad_captions",
                                        disabled=output == "video" or not captions.available())
+        repost_check(picked, by_id, labels)
         other = busy_elsewhere("download")
         go = ui_login.may_download("rad_sign_in") and st.button("Download %d clip%s" % (len(picked), "" if len(picked) == 1 else "s"),
                        type="primary", icon=":material/download:", width="stretch",
                        disabled=not picked or bool(other) or bool(job and job.running))
         if other:
-            st.caption("⏳ Waiting for the running %s to finish." % other)
+            st.caption("⏳ %s is downloading - this can start when it is done." % other)
     if job and job.running:
         progress_panel("download", where="_radar")
     elif job and job.result and job.label.startswith("Clip radar"):
@@ -142,7 +148,47 @@ def download_box(shown):
         folder = _folder()
         start_job("download", "Clip radar, %d clips" % len(clips),
                   lambda: download_clips(clips, folder, output, style, with_captions,
-                                         label="Clip radar"))
+                                         label="Clip radar", api=api, gameplay_only=gameplay))
+
+
+def _repost_chip(clip):
+    hit = reposts.cached(clip.get("id"))
+    if hit is None:
+        return []
+    n = len(hit["matches"])
+    return [("on YouTube %dx" % n, "cs-warn")] if n else [("not on YouTube yet", "cs-good")]
+
+
+def repost_check(picked, by_id, labels):
+    """Before downloading: are the picked clips already on YouTube Shorts?"""
+    key = youtube_key()
+    if not key or not picked:
+        return
+    todo = [c for c in picked if reposts.cached(c) is None][:10]
+    cost = len(todo) * reposts.COST
+    if todo and st.button("Check %d on YouTube Shorts first (~%s of %s units left today)"
+                          % (len(todo), "{:,}".format(cost), "{:,}".format(yt_quota.remaining())),
+                          icon=":material/find_in_page:", key="rad_repost",
+                          disabled=not yt_quota.can_spend(cost)):
+        with st.spinner("Searching YouTube…"):
+            for clip_id in todo:
+                try:
+                    reposts.check(key, by_id[clip_id])
+                except ValueError as error:
+                    st.error(str(error))
+                    break
+    done = [(c, reposts.cached(c)) for c in picked if reposts.cached(c) is not None]
+    for clip_id, hit in done:
+        if hit["matches"]:
+            first = hit["matches"][0]
+            st.warning("%s - already posted %d time%s, e.g. [%s](%s) by %s"
+                       % (labels[clip_id], len(hit["matches"]),
+                          "" if len(hit["matches"]) == 1 else "s",
+                          first["title"].replace("[", "(").replace("]", ")"), first["url"],
+                          first["channel"]), icon=":material/content_copy:")
+    fresh = sum(1 for _c, hit in done if not hit["matches"])
+    if fresh:
+        st.caption("✅ %d of the checked clips are not on YouTube Shorts yet." % fresh)
 
 
 def _folder():

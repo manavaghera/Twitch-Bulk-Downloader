@@ -7,7 +7,6 @@ trending gaming videos per country, and a game's most-viewed Twitch clips.
 
 import math
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from statistics import median
 
@@ -15,6 +14,7 @@ import pandas as pd
 
 from . import stats_db as db
 from .web import WebClient, is_game, mentions, normalize_name, steam_top_sellers
+from .util import thread_pool
 
 PERIODS = {"live": 0, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
 PLATFORMS = ("twitch", "kick", "youtube")
@@ -417,7 +417,7 @@ def steam_countries(game_name):
                 return rank
         return None
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with thread_pool(5) as pool:
         ranks = list(pool.map(one, [code for code, _ in STEAM_COUNTRIES]))
     return [(country, code, rank) for (code, country), rank in zip(STEAM_COUNTRIES, ranks)]
 

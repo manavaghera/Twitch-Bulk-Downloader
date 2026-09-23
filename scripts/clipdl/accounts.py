@@ -22,6 +22,7 @@ stays open, exactly as before.
 import base64
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import threading
@@ -42,6 +43,14 @@ MAX_FAILURES = 5
 FAILURE_WINDOW = 15 * 60
 LOCK_SECONDS = 5 * 60
 MAX_TRACKED_IDS = 5000
+
+# "Keep me signed in": a signed token in a browser cookie, good for this many
+# days, tied to the account's current password - changing the password or
+# removing the account ends every such sign-in. Signed with a random key kept
+# in data/ (or CLIPDL_SESSION_SECRET), which never leaves this PC.
+SESSION_DAYS = 7
+SECRET_FILE = DATA_DIR / "session_secret"
+REVOKED_FILE = DATA_DIR / "revoked_sessions.json"
 _failures = {}                  # login id -> [timestamps of recent failures]
 _failures_lock = threading.Lock()
 
@@ -124,6 +133,85 @@ def check(login_id, password, extra=None):
                 del _failures[key]
         _failures.setdefault(login_id, []).append(now)
     return None, "Wrong ID or password."
+
+
+# -- staying signed in ----------------------------------------------------------
+def _secret():
+    configured = os.environ.get("CLIPDL_SESSION_SECRET", "").strip()
+    if configured:
+        return configured.encode("utf-8")
+    try:
+        key = SECRET_FILE.read_bytes()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_bytes(32)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SECRET_FILE.write_bytes(key)
+    return key
+
+
+def _fingerprint(stored):
+    return hashlib.sha256(stored.encode("utf-8")).hexdigest()[:16]
+
+
+def _sign(raw):
+    return hmac.new(_secret(), raw.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def issue_token(login_id, extra=None, days=SESSION_DAYS):
+    """A "keep me signed in" token for this account, or None if there is no such account."""
+    login_id = normalize(login_id)
+    stored = all_users(extra).get(login_id)
+    if not stored:
+        return None
+    body = {"u": login_id, "e": int(time.time() + days * 86400), "f": _fingerprint(stored),
+            "n": secrets.token_hex(8)}
+    raw = base64.urlsafe_b64encode(json.dumps(body, separators=(",", ":")).encode("utf-8"))
+    raw = raw.decode("ascii").rstrip("=")
+    return raw + "." + _sign(raw)
+
+
+def _read_token(token):
+    try:
+        raw, signature = str(token).split(".")
+        if not hmac.compare_digest(_sign(raw), signature):
+            return None
+        body = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    except (ValueError, TypeError, UnicodeError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _revoked():
+    data = load_json(REVOKED_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def verify_token(token, extra=None):
+    """The login id a token signs in, or None when it is forged, expired, signed
+    out, or the account's password has changed since."""
+    body = _read_token(token)
+    if not body or float(body.get("e", 0)) < time.time():
+        return None
+    stored = all_users(extra).get(normalize(body.get("u")))
+    if not stored or not hmac.compare_digest(_fingerprint(stored), str(body.get("f", ""))):
+        return None
+    if str(body.get("n")) in _revoked():
+        return None
+    return normalize(body["u"])
+
+
+def revoke_token(token):
+    """Sign this token out for good (the cookie is deleted too, but a copy would not work)."""
+    body = _read_token(token)
+    if not body:
+        return
+    now = time.time()
+    revoked = {n: e for n, e in _revoked().items() if float(e) > now}   # expired ones can go
+    revoked[str(body.get("n"))] = body.get("e", now)
+    save_json(REVOKED_FILE, revoked)
 
 
 # -- changing the list (command line only) -------------------------------------

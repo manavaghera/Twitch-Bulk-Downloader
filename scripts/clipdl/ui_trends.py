@@ -6,7 +6,7 @@ from . import jobs, stats_db, ui_theme, ui_wishlist
 from .regions import best_rpm_countries, language_name
 from .trends import MIN_WIKI_VIEWS
 from .trends_cli import research
-from .ui_common import box_arts, busy_elsewhere, finished_log, progress_panel, start_job
+from .ui_common import box_arts, finished_log, progress_panel, start_job
 from .ui_downloader import trend_label
 from .web import CHART_COUNTRIES, normalize_name
 
@@ -247,7 +247,6 @@ def render_rpm(popular, art=lambda t: None, top=25):
 
 def render(api):
     job = jobs.latest("trends")
-    other = busy_elsewhere("trends")
     with st.container(border=True, key="card_trend_form"):
         ui_theme.step("📈", "What's hot in the US & Europe",
                       "Last 7 days vs the week before - Steam, IGDB, Wikipedia, Twitch, "
@@ -264,13 +263,11 @@ def render(api):
                                            "Adds about half a minute.")
         go = cols[2].button(
             "Run research", type="primary", width="stretch", icon=":material/insights:",
-            disabled=api is None or bool(job and job.running) or bool(other))
+            disabled=api is None or bool(job and job.running))
     if api is None:
         ui_theme.empty_state("🔌", "Connect to Twitch first",
                              "Paste your Twitch app credentials in the sidebar to start.")
         return
-    if other:
-        st.caption("⏳ Waiting for the running download to finish (%s)." % other)
     if go:
         st.session_state["trend_rows"] = top
         start_job("trends", "Trend research",

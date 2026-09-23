@@ -32,7 +32,7 @@ def render(api):
         games, game_list, clips_per_game, radar_clips = (config["games"], config["game_list"],
                                                          config["clips_per_game"],
                                                          config["radar_clips"])
-        if source == "rising":
+        if source in ("rising", "mine"):
             games = cols[0].number_input("How many games", 1, 10, config["games"], key="ap_games")
         elif source == "list":
             text = cols[0].text_input("Games (comma separated)", ", ".join(config["game_list"]),
@@ -91,7 +91,7 @@ def run_now(api, values):
             width="stretch", disabled=busy):
         start_job("download", "Autopilot run", lambda: autopilot.run(api, values))
     if other:
-        st.caption("⏳ Waiting for the running %s to finish." % other)
+        st.caption("⏳ %s is downloading - this can start when it is done." % other)
     if job and job.running and job.label == "Autopilot run":
         progress_panel("download", where="_ap")
 

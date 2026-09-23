@@ -133,5 +133,49 @@ def quality_text(max_height):
 
 YDL_FORMAT = ydl_format(MAX_HEIGHT)
 
-# Set when the user presses Ctrl+C so download threads can bail out quickly.
-STOP = threading.Event()
+# Which kind of background job (download, trends) the current thread works
+# for. The web page runs a download and a trend scan side by side; each has its
+# own Cancel switch and its own log, found through this. Worker pools inherit
+# it from the thread that made them (util.pool).
+_thread_kind = threading.local()
+
+
+def current_kind():
+    return getattr(_thread_kind, "kind", None)
+
+
+def set_kind(kind):
+    _thread_kind.kind = kind
+
+
+class _Stops:
+    """The Cancel switch of whoever asks: STOP.is_set() in a download thread
+    reads the download's switch, in a trend-scan thread the scan's. On the
+    command line everything is one kind, so it acts like one plain Event."""
+
+    def __init__(self):
+        self._events = {}
+        self._lock = threading.Lock()
+
+    def event(self, kind=None):
+        with self._lock:
+            return self._events.setdefault(kind, threading.Event())
+
+    def _mine(self):
+        return self.event(current_kind())
+
+    def is_set(self):
+        return self._mine().is_set()
+
+    def set(self):
+        self._mine().set()
+
+    def clear(self):
+        self._mine().clear()
+
+    def wait(self, timeout=None):
+        return self._mine().wait(timeout)
+
+
+# Set when the user presses Ctrl+C (or Cancel on the page) so threads can bail out quickly.
+STOP = _Stops()

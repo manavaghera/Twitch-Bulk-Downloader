@@ -3,6 +3,7 @@
 import getpass
 import os
 
+from . import locks
 from .api import TwitchAPI
 from .config import (CONFIG_FILE, DATA_DIR, MAX_CLIP_SECONDS, MAX_CLIPS,
                      MIN_CLIP_SECONDS, OUTPUT_FORMATS, PROJECT_DIR, QUALITIES,
@@ -300,4 +301,17 @@ def main(argv, help_text=""):
                               (ranking_label, ranking), min_seconds, max_seconds,
                               gameplay_only, history_mode, output, short_style,
                               max_height, save_root, per_game)
-    return run_session(api, request, lambda question, _kind: ask_yes_no(question)).code
+    while not locks.DOWNLOADS.acquire():
+        who = locks.owner()
+        say("")
+        say("%s is downloading right now." % (who[0] if who else "Another window"))
+        if not ask_yes_no("Wait for it to finish?", default=True):
+            return 1
+        say("Waiting...")
+        if locks.DOWNLOADS.acquire(timeout=3 * 3600, poll=5):
+            break
+    locks.note_owner("The command-line downloader")
+    try:
+        return run_session(api, request, lambda question, _kind: ask_yes_no(question)).code
+    finally:
+        locks.DOWNLOADS.release()

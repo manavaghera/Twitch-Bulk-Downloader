@@ -301,7 +301,7 @@ def render_form(api):
             if locked:
                 st.caption("🔒 Downloads are for approved accounts only.")
             elif other:
-                st.caption("⏳ Waiting for the running trend research to finish.")
+                st.caption("⏳ %s is downloading - this can start when it is done." % other)
             elif game is None:
                 st.caption("Pick a game to enable the download.")
             else:

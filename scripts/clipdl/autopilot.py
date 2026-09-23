@@ -21,7 +21,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import radar
+from . import alerts, cleanup, radar
 from .config import DATA_DIR, SCRIPT_DIR, STOP
 from .folders import saved_folder
 from .permissions import allow_filter
@@ -35,6 +35,7 @@ DEFAULTS = {"source": "rising", "games": 3, "game_list": [], "clips_per_game": 5
             "radar_clips": 15, "hours": 24, "output": "short", "style": "blur",
             "captions": False, "streamer_mode": "not_blocked", "time": "09:00"}
 SOURCES = {"rising": "Games rising in trend research", "list": "My own list of games",
+           "mine": "Games that do best on my channel",
            "radar": "The fastest clips on the clip radar (any game)"}
 
 
@@ -53,9 +54,18 @@ def last_run():
 
 
 def _pick_games(api, config):
-    if config["source"] == "list":
+    names = config["game_list"] if config["source"] == "list" else None
+    if config["source"] == "mine":
+        from .mychannel import best_games
+        names = best_games(config["games"])
+        if names:
+            say("Your channel does best with: %s" % ", ".join(names))
+        else:
+            say("No channel results yet (connect it on the My channel page) - using the "
+                "rising games instead.")
+    if names or config["source"] == "list":
         games = []
-        for name in config["game_list"]:
+        for name in names:
             game = api.game_by_name(name)
             if game:
                 games.append({"id": game["id"], "name": game["name"]})
@@ -89,11 +99,14 @@ def run(api, config=None):
         result = radar.scan(api.client_id, api.client_secret, 50, config["hours"])
         clips = radar.filtered(result, "en", 500, hide_have=True, hide_blocked=True)
         allowed = allow_filter(config["streamer_mode"])
-        clips = [c for c in clips if allowed is None or allowed(c)][:config["radar_clips"]]
-        say("Clip radar: %d clips picked of %d scanned." % (len(clips), len(result["clips"])))
+        # A few spare, for any the stream titles show to be talking clips.
+        clips = [c for c in clips if allowed is None or allowed(c)][:config["radar_clips"] * 2]
+        say("Clip radar: the best %d of %d scanned clips." % (
+            min(len(clips), config["radar_clips"]), len(result["clips"])))
         if clips:
             done = download_clips(clips, folder / "Clip radar", config["output"],
-                                  config["style"], config["captions"], label="Clip radar")
+                                  config["style"], config["captions"], label="Clip radar",
+                                  api=api, limit=config["radar_clips"])
             summary["radar"] = _count(done)
     else:
         for game in _pick_games(api, config):
@@ -113,6 +126,11 @@ def run(api, config=None):
     summary["seconds"] = round(time.time() - started)
     save_json(LAST_FILE, summary)
     _report(folder, summary)
+    try:
+        cleanup.auto_clean()
+        alerts.autopilot_done(summary)
+    except Exception as error:              # tidying up and phoning home are extras
+        say("Note: %s" % error)
     say("Autopilot done in %d min - %d new clip(s) in %s."
         % (summary["seconds"] // 60, total(summary), folder))
     return summary

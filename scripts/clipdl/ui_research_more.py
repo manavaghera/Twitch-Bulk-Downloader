@@ -1,6 +1,7 @@
 """Game Research: where would I rank, languages, compare, and the data collector."""
 
 import json
+import sys
 import time
 from datetime import datetime
 
@@ -11,6 +12,7 @@ from . import research as rs
 from . import research_more as rm
 from . import stats_collect, stats_db, ui_charts, ui_theme
 from .folders import load_prefs, save_prefs
+from .ui_common import is_hosted
 from .trends_cli import youtube_key
 
 PLATFORM_LABELS = {"twitch": "Twitch", "kick": "Kick", "youtube": "YouTube"}
@@ -198,7 +200,7 @@ def collection(api):
     for platform in ("twitch", "kick", "youtube"):
         status = json.loads(stats_db.get_meta("status_" + platform, "{}") or "{}")
         rows.append({"Platform": PLATFORM_LABELS[platform],
-                     "Last result": status.get("error") or (
+                     "Last result": status.get("error") or status.get("paused") or (
                          "%s streams, %s games" % (status.get("streams", "–"),
                                                    status.get("games", "–"))
                          if status else ("needs an API key" if platform == "youtube"
@@ -221,14 +223,57 @@ def collection(api):
             stats_db.set_tracked(key, name, False)
             st.rerun()
 
-    with st.expander("Keep recording when the page is closed", icon=":material/schedule:"):
-        st.markdown(
-            "The recorder runs while this app runs. For round-the-clock data - what makes "
-            "7- and 30-day numbers complete - run it on its own:\n\n"
-            "```\n.venv\\Scripts\\python.exe scripts\\collect_stats.py\n```\n"
-            "It records every %d minutes until closed. Or add `--once` and schedule that in "
-            "Windows Task Scheduler every %d minutes. Running both is safe: a snapshot is "
-            "never taken twice." % (stats_collect.INTERVAL_MIN, stats_collect.INTERVAL_MIN))
+    background_box()
+
+
+def health_banner(platforms):
+    """Say so when a platform's data stopped coming in, instead of showing old numbers."""
+    for platform, problem in stats_collect.health(platforms, bool(youtube_key())):
+        extra = (" Kick has no official API, so a change on its site can break this - "
+                 "the other platforms keep working." if platform == "kick" else "")
+        st.warning("**%s:** %s%s" % (PLATFORM_LABELS[platform], problem, extra),
+                   icon=":material/warning:")
+
+
+def background_box(where=""):
+    """Keep recording with the page closed: the windowless recorder, now and at sign-in."""
+    from . import recorder
+    st.markdown("##### 🌙 Record with this page closed")
+    st.caption("7- and 30-day numbers are only complete if something records around the "
+               "clock. The background recorder is a small program with no window; it can "
+               "start whenever you sign in to Windows.")
+    live = recorder.running()
+    started = recorder.since()
+    cols = st.columns([1.3, 1, 1], vertical_alignment="center")
+    cols[0].markdown("**Background recorder:** %s" % (
+        "🟢 recording (since %s)" % datetime.fromtimestamp(started).strftime("%d %b %H:%M")
+        if live and started else "🟢 recording" if live else "⚪ not running"))
+    if not live and cols[1].button("Start it now", icon=":material/play_arrow:",
+                                   key="rec_start" + where, width="stretch",
+                                   disabled=is_hosted()):
+        ok, message = recorder.start_now()
+        (st.toast if ok else st.error)(message)
+        st.rerun()
+    if live and cols[1].button("Stop it", icon=":material/stop:", key="rec_stop" + where,
+                               width="stretch"):
+        ok, message = recorder.stop_now()
+        (st.toast if ok else st.error)(message)
+        st.rerun()
+    if sys.platform == "win32" and not is_hosted():
+        on = recorder.at_startup()
+        wanted = cols[2].toggle("Start with Windows", value=on, key="rec_boot" + where,
+                                help="Adds it to your sign-in apps (Task Manager > Startup "
+                                     "apps). No admin rights needed; this switch removes it.")
+        if wanted != on:
+            ok, message = recorder.set_startup(wanted)
+            (st.toast if ok else st.error)(message)
+            if ok and wanted and not live:
+                recorder.start_now()
+            st.rerun()
+    tail = recorder.log_tail()
+    if tail:
+        with st.expander("Recorder log", icon=":material/terminal:"):
+            st.code(tail, language=None)
 
 
 def _span(seconds):

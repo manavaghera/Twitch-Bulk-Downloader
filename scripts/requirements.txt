@@ -3,3 +3,4 @@ yt-dlp>=2024.1.1
 streamlit>=1.50
 imageio-ffmpeg>=0.5   # ffmpeg for making Shorts, when none is installed
 faster-whisper>=1.1   # captions on Shorts (speech to text on this PC)
+send2trash>=1.8       # disk cleanup moves old folders to the Recycle Bin

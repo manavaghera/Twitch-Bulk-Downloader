@@ -7,7 +7,6 @@ game with every source's numbers on it, instead of three half-measured ones.
 """
 
 import re
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
@@ -16,7 +15,7 @@ from . import web as web_source
 from .api import TwitchError
 from .config import DATA_DIR
 from .trends import GameTrend, measure_twitch
-from .util import chunked, load_json, save_json, say
+from .util import chunked, load_json, save_json, say, thread_pool
 from .web import WIKI_LANGUAGES, WebClient, is_game, normalize_name
 
 WIKI_TITLES_FILE = DATA_DIR / "wiki_titles.json"   # game -> {lang: article}
@@ -208,7 +207,8 @@ def _title_fits(name, title):
     game, article = normalize_name(name), normalize_name(re.sub(r"\s*\([^)]*\)$", "", title))
     if not game or not article:
         return False
-    return game in article or article in game or         SequenceMatcher(None, game, article).ratio() >= 0.75
+    return (game in article or article in game
+            or SequenceMatcher(None, game, article).ratio() >= 0.75)
 
 
 def drop_wrong_links(web, trends, upcoming=False):
@@ -298,7 +298,7 @@ def measure_all_twitch(api, trends, sources):
         return trend
 
     done = 0
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with thread_pool(4) as pool:
         for _trend in pool.map(one, on_twitch):
             done += 1
             if done % 25 == 0 or done == len(on_twitch):

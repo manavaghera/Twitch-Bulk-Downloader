@@ -3,14 +3,14 @@
 import random
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
 from .config import (MAX_CONCURRENT_DOWNLOADS, MAX_HEIGHT, MAX_PATH_CHARS,
                      POLITE_DELAY, STOP, ydl_format)
-from .util import describe_height, human_size, sanitize, say
+from .util import describe_height, human_size, sanitize, say, thread_pool
 
 # ---------------------------------------------------------------------------
 # Downloading
@@ -296,7 +296,7 @@ def run_downloads(jobs, manifest, max_height=MAX_HEIGHT):
 
     say("")
     say("Downloading %d clip(s), %d at a time..." % (len(pending), MAX_CONCURRENT_DOWNLOADS))
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS) as pool:
+    with thread_pool(MAX_CONCURRENT_DOWNLOADS) as pool:
         futures = [pool.submit(download_one, job, total, counter, manifest, max_height)
                    for job in pending]
         try:

@@ -97,6 +97,7 @@ def render(api):
     if not platforms:
         st.info("Pick at least one platform.")
         return
+    ui_research_more.health_banner(platforms)
     st.session_state.setdefault("gr_view", VIEWS[0])     # set by code too: no default=
     view = st.pills("View", VIEWS, required=True, key="gr_view", label_visibility="collapsed")
     coverage_note(platforms, period, view)

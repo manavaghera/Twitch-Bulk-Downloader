@@ -25,10 +25,10 @@ from html import escape
 import requests
 import streamlit as st
 
-from . import jobs, ui_theme
+from . import jobs, locks, ui_theme
 from .api import TwitchAPI, TwitchError
 from .cli import stored_credentials
-from .config import CONFIG_FILE, DATA_DIR, STOP
+from .config import CONFIG_FILE, DATA_DIR
 from .util import load_json, save_json
 
 SECRET_KEYS = ("TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "YOUTUBE_API_KEY",
@@ -193,6 +193,8 @@ YOUTUBE_GUIDE = "https://console.cloud.google.com/apis/library/youtube.googleapi
 def check_youtube_key(key):
     """(True, "") if the key works, else (False, what to do about it). Costs 1 of the
     10,000 free daily quota units."""
+    from . import yt_quota
+    yt_quota.spend(1, "videos")
     try:
         response = requests.get("https://www.googleapis.com/youtube/v3/videos", params={
             "part": "id", "chart": "mostPopular", "maxResults": 1, "regionCode": "US",
@@ -213,6 +215,7 @@ def check_youtube_key(key):
         return False, ("YouTube Data API v3 is not turned on for this key's project. "
                        "Open the API library, pick it, press Enable, wait a minute, retry.")
     if "quota" in reason.lower():
+        yt_quota.exhausted()
         return False, "This key's daily quota is used up - it resets at midnight Pacific time."
     if "Blocked" in reason or "blocked" in (error.get("message") or ""):
         return False, ("The key's restrictions block this app. Under the key's settings, set "
@@ -231,6 +234,14 @@ def _youtube(can_edit):
         if key:
             st.caption("✅ Key …%s %s. YouTube is part of trend research and Game research."
                        % (escape(key[-4:]), "from YOUTUBE_API_KEY" if from_env else "saved"))
+            from . import yt_quota
+            used = yt_quota.used_today()
+            st.progress(min(used / yt_quota.DAILY, 1.0),
+                        text="Today: %s of %s free units used" % (
+                            "{:,}".format(used), "{:,}".format(yt_quota.DAILY)))
+            st.caption("The stats recorder pauses with %s left, so Shorts checks and "
+                       "uploads still work. Resets at midnight Pacific."
+                       % "{:,}".format(yt_quota.RESERVE))
         else:
             st.caption("Adds YouTube's trending gaming videos and live gaming streams to the "
                        "research. The key is free - [get one here](%s): create a project, "
@@ -279,9 +290,12 @@ def start_job(kind, label, work):
 
 
 def busy_elsewhere(kind):
-    """The label of a job of another kind that is running, else None."""
-    job = jobs.running()
-    return job.label if job and job.kind != kind else None
+    """Who else is downloading (another program: the scheduled Autopilot, the
+    command line), or None. Trend scans run beside anything, so never wait."""
+    if kind != "download" or jobs.running("download") or not locks.DOWNLOADS.busy_elsewhere():
+        return None
+    who = locks.owner()
+    return who[0] if who else "download in another window"
 
 
 def _minutes(seconds):
@@ -302,7 +316,7 @@ def progress_panel(kind, can_cancel=True, where=""):
             st.rerun(scope="app")
         return
 
-    stopping = STOP.is_set()
+    stopping = job.stop.is_set()
     # `where` keeps the widget keys apart when several tabs show the same job.
     with st.container(border=True, key="card_progress_%s%s" % (kind, where)):
         top = st.columns([5, 1], vertical_alignment="center")

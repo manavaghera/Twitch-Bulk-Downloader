@@ -32,9 +32,11 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
+from . import yt_quota
 from .config import DATA_DIR, HTTP_TIMEOUT, STOP
 from .util import chunked, load_json, save_json
 
+YOUTUBE_API = "googleapis.com/youtube/v3/"
 USER_AGENT = "TwitchTrendResearch/1.0 (personal research script; python-requests)"
 STEAM_APPS_FILE = DATA_DIR / "steam_apps.json"   # appid -> {name, type}
 
@@ -59,11 +61,13 @@ class WebClient:
     throttle anonymous-looking traffic, hence the explicit User-Agent.
     """
 
-    def __init__(self, attempts=4, stop=None):
+    def __init__(self, attempts=4, stop=None, youtube_reserve=0):
         self.session = requests.Session()
         self.session.headers["User-Agent"] = USER_AGENT
         self.attempts = attempts
         self.stop = stop or STOP        # see TwitchAPI.stop
+        # YouTube units this client leaves unspent for the day (see yt_quota).
+        self.youtube_reserve = youtube_reserve
 
     @staticmethod
     def _retry_after(response, attempt):
@@ -75,8 +79,13 @@ class WebClient:
 
     def get_json(self, url, params=None):
         """GET and parse JSON. Returns None on any failure - callers degrade."""
+        youtube = YOUTUBE_API in url
         for attempt in range(1, self.attempts + 1):
             if self.stop.is_set():
+                return None
+            # Every YouTube call is paid for in the shared daily count first;
+            # one that would overdraw the day is not made.
+            if youtube and not yt_quota.spend_on(url, reserve=self.youtube_reserve):
                 return None
             try:
                 response = self.session.get(url, params=params, timeout=HTTP_TIMEOUT)
@@ -89,6 +98,10 @@ class WebClient:
                 except ValueError:
                     return None
             if response.status_code == 404:
+                return None
+            if youtube and response.status_code == 403:
+                if "quota" in response.text.lower():
+                    yt_quota.exhausted()
                 return None
             if response.status_code == 429:
                 # Wikipedia in particular says exactly how long to back off.

@@ -23,12 +23,13 @@ import re
 import statistics
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from . import stats_db as db
+from . import yt_quota
 from .stats_bucket import Bucket, group as _group
 from .api import TwitchAPI, TwitchError
 from .web import WebClient, normalize_name
+from .util import thread_pool
 
 INTERVAL_MIN = 15
 TWITCH_PAGES = 100          # x100 streams: reaches channels with ~15 viewers
@@ -173,7 +174,7 @@ def _deep(broad, platform, rotate, cap, count_one, has_id):
             broad[key].ids = {"twitch_id": twitch_id, "kick_slug": kick_slug}
     wanted = [k for k in tracked + rotation if k in broad and has_id(broad[k])]
     found = {}
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with thread_pool(3) as pool:
         for key, bucket in zip(wanted, pool.map(lambda k: _safe(count_one, k, broad[k]),
                                                 wanted)):
             if bucket is not None and bucket.viewers:
@@ -245,6 +246,12 @@ def _store(platform, ts, interval_s, broad, deep, with_langs, started, totals=No
 # ---------------------------------------------------------------------------
 def collect_youtube(web, key, ts):
     started = time.time()
+    need = YOUTUBE_PAGES * (yt_quota.COSTS["search"] + 1)
+    if not yt_quota.can_spend(need, web.youtube_reserve):
+        return {"paused": "paused - %s of today's %s YouTube units used; %s kept for your own "
+                          "checks (resets at midnight Pacific)" % (
+                              "{:,}".format(yt_quota.used_today()), "{:,}".format(yt_quota.DAILY),
+                              "{:,}".format(yt_quota.RESERVE))}
     ids, token = [], None
     for _ in range(YOUTUBE_PAGES):
         # YouTube's live search returns nothing without a query; this broad OR of
@@ -332,14 +339,15 @@ def run_cycle(client_id, client_secret, youtube_key=None, interval_min=INTERVAL_
     interval_s = int(gap) if gap <= interval_min * 60 * 1.5 else interval_min * 60
     quiet = threading.Event()               # never set: a download's Cancel is not ours
     api = TwitchAPI(client_id, client_secret, stop=quiet, log=log or (lambda *a, **k: None))
-    web = WebClient(stop=quiet)
+    # The recorder leaves part of the day's YouTube units for what you do by hand.
+    web = WebClient(stop=quiet, youtube_reserve=yt_quota.RESERVE)
     ts = int(time.time()) // 60 * 60
     hour = str(ts // 3600)
     with_langs = db.get_meta("lang_hour") != hour
     summary = {"ts": ts}
     jobs = {"twitch": lambda: collect_twitch(api, ts, interval_s, with_langs),
             "kick": lambda: collect_kick(web, ts, interval_s, with_langs)}
-    with ThreadPoolExecutor(max_workers=2) as pool:     # the two sites side by side
+    with thread_pool(2) as pool:     # the two sites side by side
         futures = {name: pool.submit(_attempt, name, job) for name, job in jobs.items()}
     summary.update({name: future.result() for name, future in futures.items()})
     try:
@@ -356,6 +364,8 @@ def run_cycle(client_id, client_secret, youtube_key=None, interval_min=INTERVAL_
         db.prune()
         db.set_meta("last_prune", time.time())
     db.set_meta("last_summary", json.dumps(summary))
+    from . import alerts
+    alerts.run_checks(api)
     return summary
 
 
@@ -365,7 +375,35 @@ def _attempt(platform, collect):
     except Exception as error:              # one platform down must not stop the rest
         result = {"error": str(error)[:200]}
     db.set_meta("status_" + platform, json.dumps(dict(result, at=int(time.time()))))
+    if result.get("streams"):
+        db.set_meta("ok_" + platform, int(time.time()))
     return result
+
+
+# Fewer live streams than this in a whole pass means the site answered, but not
+# with what it used to - most likely Kick changed its (unofficial) pages.
+FEW_STREAMS = {"twitch": 500, "kick": 100, "youtube": 5}
+
+
+def health(platforms, youtube_on=True):
+    """[(platform, problem)] for platforms whose data is not coming in right."""
+    problems = []
+    for platform in platforms:
+        if platform == "youtube" and not youtube_on:
+            continue
+        status = json.loads(db.get_meta("status_" + platform, "{}") or "{}")
+        if not status or status.get("paused"):
+            continue
+        ok_at = float(db.get_meta("ok_" + platform, 0) or 0)
+        since = (" Its numbers stop at %s." % time.strftime("%d %b %H:%M", time.localtime(ok_at))
+                 if ok_at else "")
+        if status.get("error"):
+            problems.append((platform, "the last snapshot failed (%s).%s"
+                             % (status["error"][:140], since)))
+        elif status.get("streams", 0) < FEW_STREAMS.get(platform, 1):
+            problems.append((platform, "the last snapshot found only %d live streams - the "
+                             "site may have changed.%s" % (status.get("streams", 0), since)))
+    return problems
 
 
 def fill_box_art(api, batch=1000):

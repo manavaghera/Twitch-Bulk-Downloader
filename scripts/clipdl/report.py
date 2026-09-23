@@ -130,15 +130,18 @@ def report(jobs, manifest, folder, started_monotonic, max_height=MAX_HEIGHT):
             failed += 1
             failures.append((job.path.name, entry.get("reason", "unknown")))
 
-    # Size of everything in the game folder, not just this run.
-    folder_bytes = 0
-    file_count = 0
-    for path in folder.glob("*.mp4"):
-        try:
-            folder_bytes += path.stat().st_size
-            file_count += 1
-        except OSError:
-            pass
+    # Size of everything in the game folder, not just this run - the 16:9
+    # videos and the Shorts beside them (a Shorts-only run keeps only those).
+    folder_bytes, counts = 0, {}
+    for kind, pattern in (("video", "*.mp4"), ("Short", "Shorts/*.mp4")):
+        for path in folder.glob(pattern):
+            try:
+                folder_bytes += path.stat().st_size
+                counts[kind] = counts.get(kind, 0) + 1
+            except OSError:
+                pass
+    in_folder = " + ".join("%d %s%s" % (n, kind, "" if n == 1 else "s")
+                           for kind, n in counts.items()) or "no videos"
 
     elapsed = time.monotonic() - started_monotonic
     say("")
@@ -157,7 +160,7 @@ def report(jobs, manifest, folder, started_monotonic, max_height=MAX_HEIGHT):
     if cancelled:
         say("  Cancelled           : %d" % cancelled)
     say("  Folder              : %s" % folder)
-    say("  Clips in folder     : %d file(s), %s on disk" % (file_count, human_size(folder_bytes)))
+    say("  Clips in folder     : %s, %s on disk" % (in_folder, human_size(folder_bytes)))
     say("  Time taken          : %d min %d s" % (int(elapsed // 60), int(elapsed % 60)))
     say("  Manifest            : %s" % MANIFEST_FILE)
 

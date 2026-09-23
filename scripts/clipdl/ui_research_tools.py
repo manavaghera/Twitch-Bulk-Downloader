@@ -306,21 +306,21 @@ def shorts_demand(name):
     if not key:
         st.info("This needs a free YouTube API key - add it in the sidebar under YouTube.")
         return
-    used = yt_demand.units_today()
+    from . import yt_quota
     days = st.segmented_control("Shorts published in the last", (1, 7, 30), default=7,
                                 required=True, format_func="{} days".format, key="yd_days")
     result = yt_demand.cached(name, days)
     if st.button("Check YouTube Shorts" if not result else "Check again",
                  icon=":material/smart_display:", key="yd_go_%s" % name,
-                 disabled=used + yt_demand.CHECK_COST > yt_demand.DAILY_QUOTA):
+                 disabled=not yt_quota.can_spend(yt_demand.CHECK_COST)):
         try:
             result = yt_demand.check(key, name, days, force=True)
         except ValueError as error:
             st.error(str(error))
     st.caption("Each check uses ~%d of your %s free daily YouTube units (%s used today). "
                "Results are kept for 12 hours." % (yt_demand.CHECK_COST,
-                                                   "{:,}".format(yt_demand.DAILY_QUOTA),
-                                                   "{:,}".format(yt_demand.units_today())))
+                                                   "{:,}".format(yt_quota.DAILY),
+                                                   "{:,}".format(yt_quota.used_today())))
     if not result:
         return
     if not result["shorts"]:

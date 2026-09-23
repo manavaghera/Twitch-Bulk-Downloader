@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from clipdl import autopilot  # noqa: E402
+from clipdl import autopilot, locks  # noqa: E402
 from clipdl.api import TwitchAPI, TwitchError  # noqa: E402
 from clipdl.cli import stored_credentials  # noqa: E402
 from clipdl.config import DATA_DIR  # noqa: E402
@@ -40,11 +40,22 @@ def main():
     if not credentials:
         say("No Twitch credentials - open the web page once and connect.")
         return 1
+    # Never download beside another run (the web page, a second window): wait
+    # up to three hours for it to finish, then give up for today.
+    if not locks.DOWNLOADS.acquire():
+        who = locks.owner()
+        say("%s is downloading - waiting for it to finish..." % (who[0] if who else "Another run"))
+        if not locks.DOWNLOADS.acquire(timeout=3 * 3600, poll=30):
+            say("Still busy after 3 hours - skipping today's run.")
+            return 1
+    locks.note_owner("The scheduled Autopilot")
     try:
         autopilot.run(TwitchAPI(credentials[0], credentials[1]))
     except TwitchError as error:
         say("Stopped: %s" % error)
         return 1
+    finally:
+        locks.DOWNLOADS.release()
     return 0
 
 

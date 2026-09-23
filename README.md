@@ -55,9 +55,22 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   with a reminder a few days before.
 - **YouTube Shorts demand** - on each game page: how many views Shorts of that game got
   this week, a typical Short's views, and the top ones (needs the YouTube key).
-- **Autopilot** - every day: pick the rising games (or your own list, or the clip radar),
-  download their best new clips, make the Shorts and title files, and leave a report.
-  Runs from the page or on a daily schedule in Windows Task Scheduler.
+- **Autopilot** - every day: pick the rising games (or your own list, the games that do
+  best on your channel, or the clip radar), download their best new clips, make the Shorts
+  and title files, and leave a report. Runs from the page or on a daily schedule in
+  Windows Task Scheduler.
+- **Studio** - **trim & preview** a clip into a Short (keep only the best seconds);
+  a **weekly compilation** of the top clips as one 16:9 video with an on-screen credit on
+  each clip and YouTube chapters; **branding & hooks** - your logo, a hook line
+  ("WAIT FOR IT...") for the first seconds, an intro and an outro on every Short.
+- **Repost check** - on the clip radar: is a clip already on YouTube Shorts?
+- **My channel** - connect your YouTube channel to see which games and streamers do best
+  on it (and let the Autopilot use that), and an **upload helper** that posts Shorts with
+  their titles and hashtags, now or one every few hours.
+- **Automation** - record stats in the background from Windows sign-in, **phone alerts**
+  on Discord or Telegram (a game spikes, a streamer you follow goes live, a big launch is
+  near, the Autopilot finished), and **disk cleanup** of old dated folders (to the
+  Recycle Bin).
 
 **Access control**
 - Optional ID/password sign-in with owner-created accounts only (no sign-up), for the
@@ -114,6 +127,7 @@ hidden and stored only as salted PBKDF2 hashes in `data/users.json`):
 
 By default the whole page needs a sign-in. To protect only downloads, add
 `"login_required_for": "downloads"` to `data/config.json` (or set `CLIPDL_LOGIN=downloads`).
+"Keep me signed in" lasts 7 days per browser; changing a password or signing out ends it.
 
 ## Game research data
 
@@ -125,25 +139,27 @@ the top 10,000 Twitch streams and ~1,000 Kick streams, and counts every channel 
 big games in rotation (and of any game you *track*). History older than 7 days is thinned
 to hourly; everything older than 35 days is dropped.
 
-The page records while it is open. To record around the clock without it:
+The page records while it is open. To record around the clock without it, use
+**Automation → Background recording**: *Start it now*, and *Start with Windows* to have it
+start at every sign-in (a per-user startup entry, no admin rights; the same switch removes
+it). Or run it yourself:
 
 ```bash
 .venv\Scripts\python.exe scripts\collect_stats.py
 ```
 
-(or `--once`, scheduled every 15 minutes in Windows Task Scheduler). Running both at once
-is safe. Kick is read from the list its own website uses, which is not an official API and
-may change.
+Running both at once is safe. Kick is read from the list its own website uses, which is
+not an official API and may change - Game research shows a warning when it stops working.
 
 ## Captions and the Autopilot
 
 Captions use faster-whisper, installed with the requirements; the speech model (~150 MB)
 downloads on first use and runs on the CPU (about a second per clip). The Autopilot saves
-into `<download folder>\Autopilot\<date>`; scheduled runs log to `datautopilot.log`.
+into `<download folder>\Autopilot\<date>`; scheduled runs log to `data\autopilot.log`.
 Run it by hand with:
 
 ```bash
-.venv\Scripts\python.exe scriptsutopilot.py
+.venv\Scripts\python.exe scripts\autopilot.py
 ```
 
 ## Optional: YouTube
@@ -160,9 +176,18 @@ live YouTube gaming streams to Game research.
 6. In Clip Studio's sidebar, open **YouTube**, paste the key, press **Save & test**.
    (Or put `"youtube_api_key": "..."` in `data/config.json`, or set `YOUTUBE_API_KEY`.)
 
-It costs nothing: the free quota is 10,000 units a day, and the app uses about 5,000 -
-an hourly live-stream check (~200 units) plus ~8 per trend research run. No billing
-account is needed.
+It costs nothing: the free quota is 10,000 units a day. Every call is counted in one
+place (the sidebar shows today's use); the background recording uses up to ~5,000 and
+pauses with 2,000 left, so Shorts checks (~101 each), repost checks (100 each) and
+uploads (1,600 each) still work. No billing account is needed.
+
+**My channel** (results and uploads) also needs an OAuth client in the same Google Cloud
+project: **OAuth consent screen** → External → add yourself as a test user; then
+**Credentials → Create credentials → OAuth client ID → Desktop app** → download the JSON
+and drop it on the My channel page. Two Google rules to know: in *Testing* mode the
+sign-in lasts 7 days (connect again, or publish the consent screen); and until a project
+passes YouTube's [API audit](https://support.google.com/youtube/contact/yt_api_form),
+everything it uploads stays private.
 
 ## Hosting
 
@@ -185,6 +210,20 @@ really want it open. Downloads run on the server; hosted users get them as a `.z
 
 Everything under `data/` (credentials, token cache, accounts, run history, caches) and
 `downloads/` is git-ignored and never leaves your PC.
+
+## Phone alerts
+
+Automation → Phone alerts. **Discord**: channel settings → Integrations → Webhooks → New
+Webhook → Copy URL. **Telegram**: message @BotFather, `/newbot`, copy the token; send your
+bot a message, open `https://api.telegram.org/bot<token>/getUpdates` and copy the chat id.
+Alerts are checked with every stats snapshot, so recording has to run.
+
+## Tests
+
+```bash
+.venv\Scripts\pip install pytest
+.venv\Scripts\python.exe -m pytest tests
+```
 
 ## Notes
 

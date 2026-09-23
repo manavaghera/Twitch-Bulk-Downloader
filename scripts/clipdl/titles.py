@@ -42,8 +42,26 @@ def _clean(title):
     return title.strip(" -|")
 
 
-def suggest(clip_title, streamer, game_name, game_key="", clip_url="", trending=()):
-    """{"titles": [3 options], "description": str, "hashtags": [..]}."""
+_CHANNEL_IN_URL = re.compile(r"twitch\.tv/([A-Za-z0-9_]{3,25})/clip/", re.IGNORECASE)
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_]{3,25}")
+
+
+def login_from(clip_url="", display=""):
+    """The channel's Twitch login - what twitch.tv/<login> needs - or "" when
+    unsure. From a twitch.tv/<login>/clip/ address; otherwise from the display
+    name, which Twitch only lets differ from the login in capitals - unless it
+    is written in another script (Korean, Japanese...), and then it says nothing."""
+    match = _CHANNEL_IN_URL.search(clip_url or "")
+    if match:
+        return match.group(1).lower()
+    display = (display or "").strip()
+    return display.lower() if _PLAIN_NAME.fullmatch(display) else ""
+
+
+def suggest(clip_title, streamer, game_name, game_key="", clip_url="", trending=(),
+            login=None):
+    """{"titles": [3 options], "description": str, "hashtags": [..]}.
+    `login` is the channel's Twitch login when known (see login_from)."""
     title = _clean(clip_title)
     words = title.lower().split()
     seed = zlib.crc32((clip_url or title or streamer).encode("utf-8"))
@@ -69,7 +87,7 @@ def suggest(clip_title, streamer, game_name, game_key="", clip_url="", trending=
     main = game_tag(game_key, game_name)
     if main:
         tags.insert(0, main)
-    handle = re.sub(r"[^A-Za-z0-9_]", "", streamer or "").lower()
+    handle = (login or login_from(clip_url, streamer)).lower()
     if handle:
         tags.append(handle)
     for tag in trending or ():

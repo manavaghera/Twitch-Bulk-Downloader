@@ -6,7 +6,7 @@ from datetime import date
 import streamlit as st
 
 from . import jobs, releases, ui_theme, wishlist
-from .ui_common import busy_elsewhere, progress_panel, start_job
+from .ui_common import progress_panel, start_job
 
 VERDICT_CHIPS = {"boom": ("🔥 Boom likely", "cs-warn"), "heating": ("🚀 Heating up", "cs-good"),
                  "strong": ("📈 Strong", "cs-info"), "cooling": ("🧊 Losing steam", "cs-move"),
@@ -37,7 +37,7 @@ def _countdown(days):
 def render(api):
     data = releases.load()
     job = jobs.latest("trends")
-    busy = bool(job and job.running) or bool(busy_elsewhere("trends"))
+    busy = bool(job and job.running)
     with st.container(border=True, key="card_releases"):
         ui_theme.step("📅", "Release calendar",
                       "Upcoming launches from Steam's most-wishlisted chart. Launch week is when "

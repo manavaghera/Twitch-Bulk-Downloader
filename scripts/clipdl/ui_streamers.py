@@ -135,7 +135,7 @@ def streamer_card(api, entry, stream, last):
         if editing:
             camera_editor(entry, clips, box)
         with st.expander("Best clips this week (%d)" % len(clips), icon=":material/movie:"):
-            clip_list(entry, clips)
+            clip_list(api, entry, clips)
 
 
 def camera_editor(entry, clips, box):
@@ -169,7 +169,7 @@ def camera_editor(entry, clips, box):
         st.rerun()
 
 
-def clip_list(entry, clips):
+def clip_list(api, entry, clips):
     if not clips:
         st.caption("No clips in the last 7 days.")
         return
@@ -182,7 +182,7 @@ def clip_list(entry, clips):
         "value": _fmt(c.get("view_count")), "value_sub": "views",
         "bar": (c.get("view_count") or 0) / best * 100}
         for i, c in enumerate(clips[:10], 1)], wide=True)
-    cols = st.columns([1, 1.4, 1], vertical_alignment="bottom")
+    cols = st.columns([1, 1.4, 1, 1], vertical_alignment="bottom")
     count = cols[0].segmented_control("Grab the top", (3, 5, 10), default=5, required=True,
                                       key="grab_n_%s" % entry["id"])
     style = cols[1].selectbox("As Shorts, look", list(STYLE_LABELS), format_func=STYLE_LABELS.get,
@@ -191,16 +191,19 @@ def clip_list(entry, clips):
                               key="grab_style_%s" % entry["id"])
     with_captions = cols[2].toggle("Captions", key="grab_cap_%s" % entry["id"],
                                    disabled=not captions.available())
+    gameplay = cols[3].toggle("Gameplay only", value=True, key="grab_play_%s" % entry["id"],
+                              help="Skips clips of chatting or reacting and takes the next "
+                                   "best instead. Turn off for Just Chatting streamers.")
     job = jobs.latest("download")
     busy = bool(busy_elsewhere("download")) or bool(job and job.running)
     if ui_login.may_download("grab_sign_%s" % entry["id"]) and st.button(
             "Download %s's top %d as Shorts" % (entry["name"], count), key="grab_%s" % entry["id"],
             icon=":material/download:", disabled=busy, width="stretch"):
-        picked = clips[:count]
         folder = Path(saved_folder()[0]) / sanitize(entry["name"]) / date.today().isoformat()
-        start_job("download", "%s, top %d clips" % (entry["name"], len(picked)),
-                  lambda: download_clips(picked, folder, "short", style, with_captions,
-                                         label=entry["name"]))
+        start_job("download", "%s, top %d clips" % (entry["name"], count),
+                  lambda: download_clips(list(clips), folder, "short", style, with_captions,
+                                         label=entry["name"], api=api, gameplay_only=gameplay,
+                                         limit=count))
     if job and job.running and job.label.startswith(entry["name"]):
         progress_panel("download", where="_st_%s" % entry["id"])
 

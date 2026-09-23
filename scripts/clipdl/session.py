@@ -11,17 +11,19 @@ import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 
+from .api import TwitchError
 from .config import (DATA_DIR, DOWNLOAD_ROOT, LANG_FILE, MANIFEST_FILE, MAX_HEIGHT,
                      OUTPUT_FORMATS, SHORT_STYLES, STOP, TARGET_LANGUAGE,
-                     VELOCITY_MIN_SCAN, VELOCITY_OVERSCAN, quality_text)
+                     VELOCITY_MIN_SCAN, VELOCITY_OVERSCAN, VOD_FILE, quality_text)
 from . import permissions, titles
 from .download import build_jobs, next_free_number, run_downloads
-from .filter import clip_age_hours, collect_clips, ranker
+from .filter import (classify_clip, clip_age_hours, collect_clips, ranker,
+                     resolve_stream_titles)
 from .folders import game_folder
 from .manifest import Manifest
 from .report import report, report_filtered, report_shortfall
 from .shorts import SHORTS_FOLDER, convert_all, find_ffmpeg
-from .util import human_size, load_json, sanitize, say
+from .util import human_size, load_json, sanitize, save_json, say
 
 EXPORTS_DIR = DATA_DIR / "exports"      # zips built for the web page
 
@@ -293,7 +295,7 @@ def run_session(api, request, confirm):
         run_downloads(jobs, manifest, request.max_height)
         convert_all(jobs, manifest, request.output, request.short_style,
                     with_captions=request.captions)
-        write_sidecars(jobs, manifest, request.game)
+        write_sidecars(jobs, manifest, request.game, api)
     except KeyboardInterrupt:
         STOP.set()
         manifest.flush()
@@ -318,19 +320,35 @@ def trending_tags(game_name, limit=5):
     return [term[1:] for term, _c in rows if "drop" not in term.lower()][:limit]
 
 
-def write_sidecars(jobs, manifest, game):
+def channel_logins(api, jobs):
+    """{broadcaster id: login} for the channels whose login the clip itself does
+    not give away (display names in another script) - one Twitch call per 100."""
+    wanted = sorted({job.broadcaster_id for job in jobs if job.broadcaster_id
+                     and not titles.login_from(job.url, job.streamer)})
+    logins = {}
+    for start in range(0, len(wanted) if api is not None else 0, 100):
+        try:
+            users = api.get("/users", {"id": wanted[start:start + 100]}).get("data") or []
+        except TwitchError:
+            break                           # the .txt simply leaves the channel link out
+        logins.update({u["id"]: u["login"] for u in users if u.get("login")})
+    return logins
+
+
+def write_sidecars(jobs, manifest, game, api=None):
     """A .txt of title options, a description and hashtags beside every file made."""
     from .web import normalize_name
     game_name = (game or {}).get("name", "")
+    jobs = [job for job in jobs
+            if manifest.status_of(job.clip_id) in ("downloaded", "skipped-exists")]
+    logins = channel_logins(api, jobs)
     tags_of, written = {}, 0            # each game's trending tags, looked up once
     for job in jobs:
-        if manifest.status_of(job.clip_id) not in ("downloaded", "skipped-exists"):
-            continue
         name = job.game_name or game_name
         if name not in tags_of:
             tags_of[name] = trending_tags(name) if name else []
         suggestion = titles.suggest(job.title, job.streamer, name, normalize_name(name),
-                                    job.url, tags_of[name])
+                                    job.url, tags_of[name], logins.get(job.broadcaster_id))
         for path in {job.path, getattr(job, "short", None)} - {None}:
             if path.exists() and titles.write_sidecar(path, suggestion):
                 written += 1
@@ -339,18 +357,52 @@ def write_sidecars(jobs, manifest, game):
             "(.txt)" % written)
 
 
+def keep_gameplay(clips, api=None):
+    """The clips minus the talking ones (caster desks, chatting, reactions),
+    judged like a normal run: the clip title plus the title of the stream it
+    came from, when `api` can look that up."""
+    vod_cache = load_json(VOD_FILE, {})
+    vod_cache = vod_cache if isinstance(vod_cache, dict) else {}
+    if api is not None:
+        try:
+            if resolve_stream_titles(api, clips, vod_cache):
+                save_json(VOD_FILE, vod_cache)
+        except TwitchError:
+            pass                            # judge by the clip titles alone
+    kept = []
+    for clip in clips:
+        kind, reason = classify_clip(clip, vod_cache.get(clip.get("video_id") or "", ""))
+        if kind == "talk":
+            say("  Skipped - talking, not gameplay (%s): %s" % (
+                reason or "title", (clip.get("title") or "")[:60]))
+        else:
+            kept.append(clip)
+    return kept
+
+
 def download_clips(clips, folder, output="video", short_style="blur", captions=False,
-                   max_height=MAX_HEIGHT, label="clips"):
+                   max_height=MAX_HEIGHT, label="clips", api=None, gameplay_only=True,
+                   limit=None):
     """Download a hand-picked list of clips (from the clip radar, a streamer's page
     or the autopilot) into `folder`, then make Shorts and title files like a run.
 
-    Each clip dict needs Twitch's clip fields plus "game_name". Returns a
-    DownloadResult. Clips already downloaded before are fetched again only
-    if their file is gone.
+    Each clip dict needs Twitch's clip fields plus "game_name". With
+    `gameplay_only` the talking clips are left out first, like in a normal run;
+    `limit` then keeps the first that many. Returns a DownloadResult. Clips
+    already downloaded before are fetched again only if their file is gone.
     """
     if output in ("short", "both") and not find_ffmpeg():
         say("Making Shorts needs ffmpeg, and it is not installed.")
         return DownloadResult(1)
+    if gameplay_only:
+        before = len(clips)
+        clips = keep_gameplay(clips, api)
+        if len(clips) < before:
+            say("Left out %d talking clip(s) of %d." % (before - len(clips), before))
+    clips = clips[:limit] if limit else clips
+    if not clips:
+        say("Nothing left to download.")
+        return DownloadResult(0)
     manifest = Manifest(MANIFEST_FILE)
     folder.mkdir(parents=True, exist_ok=True)
     jobs = build_jobs(clips, folder, label, next_free_number(folder))
@@ -362,7 +414,7 @@ def download_clips(clips, folder, output="video", short_style="blur", captions=F
     try:
         run_downloads(jobs, manifest, max_height)
         convert_all(jobs, manifest, output, short_style, with_captions=captions)
-        write_sidecars(jobs, manifest, None)
+        write_sidecars(jobs, manifest, None, api)
     except KeyboardInterrupt:
         STOP.set()
         manifest.flush()
