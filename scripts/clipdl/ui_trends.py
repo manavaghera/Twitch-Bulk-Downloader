@@ -2,13 +2,13 @@
 
 import streamlit as st
 
-from . import jobs, ui_theme, ui_wishlist
+from . import jobs, stats_db, ui_theme, ui_wishlist
 from .regions import best_rpm_countries, language_name
 from .trends import MIN_WIKI_VIEWS
 from .trends_cli import research
 from .ui_common import box_arts, busy_elsewhere, finished_log, progress_panel, start_job
 from .ui_downloader import trend_label
-from .web import CHART_COUNTRIES
+from .web import CHART_COUNTRIES, normalize_name
 
 DOWNLOAD_TAB = "⬇️  Clip downloader"     # must match the tab label in web_app.py
 
@@ -36,13 +36,28 @@ def _confidence(trend):
     return "●●● high" if share >= 0.75 else "●●○ medium" if share >= 0.5 else "●○○ low"
 
 
-def popular_rows(popular, previous, top):
+ICON = st.column_config.ImageColumn(" ", width="small")
+
+
+def art_lookup(api, trends):
+    """trend -> small icon URL: its Twitch category art, else the art the stats
+    collector saved for a game of that name, else None."""
+    arts = box_arts(api, [t.id for t in trends if t.id])
+    saved = stats_db.icons()
+
+    def art(trend):
+        template = arts.get(trend.id) or saved.get(normalize_name(trend.name))
+        return ui_theme.box_art(template, 52, 70) if template else None
+    return art
+
+
+def popular_rows(popular, previous, top, art=lambda t: None):
     before = {row.get("name"): row.get("popularity") for row in (previous or {}).get("games", [])}
     rows = []
     for rank, trend in enumerate(popular[:top], 1):
         was = before.get(trend.name)
         rows.append({
-            "#": rank, "Game": trend.name, "Popularity": round(trend.popularity * 100),
+            "#": rank, " ": art(trend), "Game": trend.name, "Popularity": round(trend.popularity * 100),
             "Trend": VERDICT_ICONS.get(trend.verdict, trend.verdict),
             "Steam charts (US/EU)": _charts(trend), "Steam peak players": trend.steam_peak or None,
             "Live US/EU viewers": _live(trend) or None, "Wikipedia views / wk": trend.wiki_recent or None,
@@ -52,17 +67,17 @@ def popular_rows(popular, previous, top):
     return rows
 
 
-def rising_rows(rising, top):
+def rising_rows(rising, top, art=lambda t: None):
     return [{
-        "#": rank, "Game": trend.name, "Heat": round(trend.momentum * 100),
+        "#": rank, " ": art(trend), "Game": trend.name, "Heat": round(trend.momentum * 100),
         "Popularity": round(trend.popularity * 100), "Released": trend.released_text(),
         "Trend": VERDICT_ICONS.get(trend.verdict, trend.verdict), "Why": trend.why(),
     } for rank, trend in enumerate(rising[:top], 1)]
 
 
-def cooling_rows(popular):
+def cooling_rows(popular, art=lambda t: None):
     return [{
-        "Game": trend.name, "Popularity": round(trend.popularity * 100),
+        " ": art(trend), "Game": trend.name, "Popularity": round(trend.popularity * 100),
         "Wikipedia wk/wk %": _pct(trend.wiki_growth), "Twitch clips wk/wk %": _pct(trend.growth),
         "Steam rank change": (trend.steam_climb if trend.steam_climb not in (None, float("inf"))
                               else None),
@@ -133,12 +148,14 @@ def render_results(api, found, top):
     popular, rising = found["popular"], found["rising"]
     sources = found["sources"]
     ok = sum(1 for count in sources.values() if count and count != "failed")
-    cols = st.columns(4)
-    cols[0].metric("Games", len(found["trends"]), help="Games compared across every source")
-    cols[1].metric("Sources", "%d / %d" % (ok, len(sources)), help="Sources that answered")
-    cols[2].metric("Rising", len(rising), help="New or climbing this week")
-    cols[3].metric("Cooling", sum(1 for t in popular[:30] if t.verdict == "cooling"),
-                   help="Still big, but attention is falling")
+    ui_theme.kpis([
+        ("Games compared", str(len(found["trends"])), None, "Across every source"),
+        ("Sources answered", "%d / %d" % (ok, len(sources)), None, None),
+        ("Rising", str(len(rising)), None, "New or climbing this week"),
+        ("Cooling off", str(sum(1 for t in popular[:30] if t.verdict == "cooling")), None,
+         "Still big, but attention is falling")])
+    art = art_lookup(api, popular[:top + 30] + rising[:top] + [
+        t for t in found["trends"] if t.is_upcoming])
     render_highlights(api, popular, rising)
     if found.get("wishlist") is not False:
         st.space("small")
@@ -157,15 +174,16 @@ def render_results(api, found, top):
                    "a game that is not on Steam, and that is not held against it."
                    + (" 'vs last run' compares with your scan of %s."
                       % previous["taken_at"][:10] if previous else ""))
-        st.dataframe(popular_rows(popular, previous, top), hide_index=True, width="stretch",
-                     column_config={"Popularity": score, "Steam peak players": count,
+        st.dataframe(popular_rows(popular, previous, top, art), hide_index=True,
+                     width="stretch",
+                     column_config={" ": ICON, "Popularity": score, "Steam peak players": count,
                                     "Live US/EU viewers": count, "Wikipedia views / wk": count})
     with tabs[1]:
         if rising:
             st.caption("Heat: how hard it is climbing, averaged over every source that can "
                        "see it (−100 falling fast, +100 climbing fast).")
-            st.dataframe(rising_rows(rising, top), hide_index=True, width="stretch",
-                         column_config={"Popularity": score,
+            st.dataframe(rising_rows(rising, top, art), hide_index=True, width="stretch",
+                         column_config={" ": ICON, "Popularity": score,
                                         "Heat": st.column_config.ProgressColumn(
                                             min_value=0, max_value=100, format="%+d"),
                                         "Why": st.column_config.TextColumn(width="large")})
@@ -174,26 +192,27 @@ def render_results(api, found, top):
     with tabs[2]:
         st.caption("Still big, but attention is falling - the fad that is ending. These are "
                    "kept off the rising list however big they still are.")
-        rows = cooling_rows(popular)
+        rows = cooling_rows(popular, art)
         if rows:
             st.dataframe(rows, hide_index=True, width="stretch",
-                         column_config={"Popularity": score})
+                         column_config={" ": ICON, "Popularity": score})
         else:
             st.info("Nothing in the top 30 is clearly fading this week.")
     with tabs[3]:
         upcoming = sorted((t for t in found["trends"] if t.is_upcoming and t.igdb_visits
                            and (t.wiki_recent >= MIN_WIKI_VIEWS or t.chart_ranks)),
-                          key=lambda t: t.igdb_visits, reverse=True)[:10]
+                          key=lambda t: t.igdb_visits, reverse=True)[:top]
         if upcoming:
             st.caption("Not out yet, but people are already looking it up.")
-            st.dataframe([{"Game": t.name, "Releases": t.released.strftime("%d %b %Y"),
+            st.dataframe([{" ": art(t), "Game": t.name,
+                           "Releases": t.released.strftime("%d %b %Y"),
                            "Wikipedia views / wk": t.wiki_recent or None} for t in upcoming],
                          hide_index=True, width="stretch",
-                         column_config={"Wikipedia views / wk": count})
+                         column_config={" ": ICON, "Wikipedia views / wk": count})
         else:
             st.info("No upcoming game is drawing real attention yet.")
     with tabs[4]:
-        render_rpm(popular)
+        render_rpm(popular, art, top)
     with tabs[5]:
         st.dataframe([{"Source": label,
                        "Read": "unavailable this run" if not count or count == "failed" else count}
@@ -209,7 +228,7 @@ def render_results(api, found, top):
                    "weight in the score.")
 
 
-def render_rpm(popular):
+def render_rpm(popular, art=lambda t: None, top=25):
     st.caption("Published industry estimates for long-form gaming, typed into "
                "scripts/clipdl/regions.py - not live data. Shorts pay roughly 100× less.")
     left, right = st.columns(2)
@@ -219,10 +238,11 @@ def render_rpm(popular):
                     for country, code, low, high in best_rpm_countries(15)],
                    hide_index=True, width="stretch")
     right.markdown("**What each top game's Twitch audience is worth**")
-    measured = sorted((t for t in popular[:10] if t.viewers_by_language),
+    measured = sorted((t for t in popular[:top] if t.viewers_by_language),
                       key=lambda t: t.rpm, reverse=True)
-    right.dataframe([{"Game": t.name, "Est. RPM ($)": round(t.rpm, 2)} for t in measured],
-                    hide_index=True, width="stretch")
+    right.dataframe([{" ": art(t), "Game": t.name, "Est. RPM ($)": round(t.rpm, 2)}
+                     for t in measured], hide_index=True, width="stretch",
+                    column_config={" ": ICON})
 
 
 def render(api):
@@ -233,11 +253,11 @@ def render(api):
                       "Last 7 days vs the week before - Steam, IGDB, Wikipedia, Twitch, "
                       "Kick and (optionally) YouTube.")
         cols = st.columns([2.4, 1.3, 1.3], gap="medium", vertical_alignment="bottom")
-        candidates = cols[0].slider("Twitch categories in the pool", 10, 100, 40, 10,
+        candidates = cols[0].slider("Twitch categories in the pool", 20, 200, 100, 10,
                                     help="How many of Twitch's top categories to add to "
                                          "the games the charts already name.")
         with cols[1]:
-            top = st.segmented_control("Rows per list", (10, 20, 30), default=10,
+            top = st.segmented_control("Games per list", (10, 25, 50, 100), default=25,
                                        required=True, key="trend_top")
             with_wishlist = st.toggle("Steam wishlists", value=True, key="trend_wishlist",
                                       help="Also scan Steam's most wishlisted upcoming games. "

@@ -333,6 +333,7 @@ class ClipBuckets:
         # Counts used by the shortfall report when a run cannot be filled.
         self.scanned = 0        # unique clips Twitch returned for the window
         self.already_had = 0    # of those, ones an earlier run already fetched
+        self.not_allowed = 0    # skipped by the permission list
         self.exhausted = False  # True once Twitch has no more pages to give
         self.hit_page_cap = False
 
@@ -342,7 +343,7 @@ class ClipBuckets:
 
 def collect_clips(api, game, wanted, started_at, ended_at, language_cache,
                   gameplay_only=True, skip_ids=frozenset(), dedupe=SKIP_DUPLICATES,
-                  min_seconds=0, max_seconds=0):
+                  min_seconds=0, max_seconds=0, allow=None):
     """Page through /helix/clips until we have `wanted` gameplay clips.
 
     Twitch hands back clips most-viewed-first, so every bucket keeps that
@@ -403,6 +404,9 @@ def collect_clips(api, game, wanted, started_at, ended_at, language_cache,
                 # Already on an earlier run's books. Dropping it here rather
                 # than after the filter also saves the language and VOD lookups.
                 buckets.already_had += 1
+                continue
+            if allow is not None and not allow(clip):
+                buckets.not_allowed += 1        # the permission list says no
                 continue
             fresh.append(clip)
 

@@ -101,7 +101,7 @@ def game_details(client, igdb_ids):
     return details
 
 
-def most_visited(client, limit=60):
+def most_visited(client, limit=100):
     """[(igdb id, share of visits)] - the games IGDB's visitors look up most.
 
     IGDB recomputes this daily, so it moves as fast as attention does: a game

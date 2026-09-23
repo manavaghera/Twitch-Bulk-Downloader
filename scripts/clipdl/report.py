@@ -26,6 +26,10 @@ def report_filtered(buckets):
               buckets.dropped)
     _examples("Repeats   : skipped %d clip(s) of a moment already kept:",
               buckets.duplicates)
+    if getattr(buckets, "not_allowed", 0):
+        say("")
+        say("Permission: skipped %d clip(s) from streamers your permission list rules out."
+            % buckets.not_allowed)
     if buckets.out_of_range:
         say("")
         say("Length    : set aside %d clip(s) of the wrong length "

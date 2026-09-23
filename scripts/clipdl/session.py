@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from .config import (DATA_DIR, DOWNLOAD_ROOT, LANG_FILE, MANIFEST_FILE, MAX_HEIGHT,
                      OUTPUT_FORMATS, SHORT_STYLES, STOP, TARGET_LANGUAGE,
                      VELOCITY_MIN_SCAN, VELOCITY_OVERSCAN, quality_text)
+from . import permissions, titles
 from .download import build_jobs, next_free_number, run_downloads
 from .filter import clip_age_hours, collect_clips, ranker
 from .folders import game_folder
@@ -31,7 +32,7 @@ class DownloadRequest:
     def __init__(self, game, wanted, window, ranking, min_seconds, max_seconds,
                  gameplay_only=True, history_mode="new", output="video",
                  short_style="blur", max_height=MAX_HEIGHT, save_root=None,
-                 per_game=True):
+                 per_game=True, captions=False, streamer_mode="not_blocked"):
         self.game = game                        # a Twitch category dict
         self.wanted = wanted
         self.window_label, self.window_hours = window
@@ -44,6 +45,8 @@ class DownloadRequest:
         self.max_height = max_height            # 1080, or 0 for no cap
         self.save_root = save_root or DOWNLOAD_ROOT
         self.per_game = per_game                # a sub-folder per game?
+        self.captions = captions                # burn captions into the Shorts?
+        self.streamer_mode = streamer_mode      # permissions.MODES key
 
     @property
     def folder(self):
@@ -193,7 +196,8 @@ def run_session(api, request, confirm):
         target = max(wanted * VELOCITY_OVERSCAN, VELOCITY_MIN_SCAN)
     buckets = collect_clips(api, request.game, target, started_at, ended_at, language_cache,
                             request.gameplay_only, skip_ids,
-                            min_seconds=request.min_seconds, max_seconds=request.max_seconds)
+                            min_seconds=request.min_seconds, max_seconds=request.max_seconds,
+                            allow=permissions.allow_filter(request.streamer_mode))
 
     report_filtered(buckets)
 
@@ -287,7 +291,9 @@ def run_session(api, request, confirm):
     started_monotonic = time.monotonic()
     try:
         run_downloads(jobs, manifest, request.max_height)
-        convert_all(jobs, manifest, request.output, request.short_style)
+        convert_all(jobs, manifest, request.output, request.short_style,
+                    with_captions=request.captions)
+        write_sidecars(jobs, manifest, request.game)
     except KeyboardInterrupt:
         STOP.set()
         manifest.flush()
@@ -297,3 +303,73 @@ def run_session(api, request, confirm):
     report_shortfall(wanted, chosen, buckets, game_name, request.window_label,
                      request.gameplay_only, request.history_mode)
     return DownloadResult(0, folder, jobs, manifest, request)
+
+
+def trending_tags(game_name, limit=5):
+    """The tags streamers of this game use right now, from the stats collector."""
+    try:
+        from . import stats_db
+        from .web import normalize_name
+        rows = stats_db.query("SELECT term, SUM(channels) FROM game_terms WHERE game_key = ?"
+                              " AND term LIKE '#%' GROUP BY term ORDER BY 2 DESC LIMIT ?",
+                              (normalize_name(game_name), limit * 3))
+    except Exception:           # no stats recorded yet: titles do without
+        return []
+    return [term[1:] for term, _c in rows if "drop" not in term.lower()][:limit]
+
+
+def write_sidecars(jobs, manifest, game):
+    """A .txt of title options, a description and hashtags beside every file made."""
+    from .web import normalize_name
+    game_name = (game or {}).get("name", "")
+    tags_of, written = {}, 0            # each game's trending tags, looked up once
+    for job in jobs:
+        if manifest.status_of(job.clip_id) not in ("downloaded", "skipped-exists"):
+            continue
+        name = job.game_name or game_name
+        if name not in tags_of:
+            tags_of[name] = trending_tags(name) if name else []
+        suggestion = titles.suggest(job.title, job.streamer, name, normalize_name(name),
+                                    job.url, tags_of[name])
+        for path in {job.path, getattr(job, "short", None)} - {None}:
+            if path.exists() and titles.write_sidecar(path, suggestion):
+                written += 1
+    if written:
+        say("Titles    : title ideas, a description and hashtags saved beside %d file(s) "
+            "(.txt)" % written)
+
+
+def download_clips(clips, folder, output="video", short_style="blur", captions=False,
+                   max_height=MAX_HEIGHT, label="clips"):
+    """Download a hand-picked list of clips (from the clip radar, a streamer's page
+    or the autopilot) into `folder`, then make Shorts and title files like a run.
+
+    Each clip dict needs Twitch's clip fields plus "game_name". Returns a
+    DownloadResult. Clips already downloaded before are fetched again only
+    if their file is gone.
+    """
+    if output in ("short", "both") and not find_ffmpeg():
+        say("Making Shorts needs ffmpeg, and it is not installed.")
+        return DownloadResult(1)
+    manifest = Manifest(MANIFEST_FILE)
+    folder.mkdir(parents=True, exist_ok=True)
+    jobs = build_jobs(clips, folder, label, next_free_number(folder))
+    for job, clip in zip(jobs, clips):
+        job.game_name = clip.get("game_name") or label
+    say("")
+    say("Downloading %d hand-picked clip(s) to %s" % (len(jobs), folder))
+    started = time.monotonic()
+    try:
+        run_downloads(jobs, manifest, max_height)
+        convert_all(jobs, manifest, output, short_style, with_captions=captions)
+        write_sidecars(jobs, manifest, None)
+    except KeyboardInterrupt:
+        STOP.set()
+        manifest.flush()
+    report(jobs, manifest, folder, started, max_height)
+    request = DownloadRequest({"name": label}, len(clips), ("picked", 0), ("picked", "views"),
+                              0, 0, output=output, short_style=short_style,
+                              max_height=max_height, save_root=folder.parent, per_game=False,
+                              captions=captions)
+    return DownloadResult(0, folder, jobs, manifest, request)
+

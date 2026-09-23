@@ -22,6 +22,7 @@ variables or Streamlit secrets instead:
 import os
 from html import escape
 
+import requests
 import streamlit as st
 
 from . import jobs, ui_theme
@@ -85,13 +86,16 @@ def _box_arts(client_id, client_secret, ids):
 
 def box_arts(api, ids):
     """{Twitch game id: box art url template}, cached for an hour. {} on any trouble."""
-    ids = tuple(sorted({str(i) for i in ids if i}))[:100]
+    ids = tuple(sorted({str(i) for i in ids if i}))
     if api is None or not ids:
         return {}
-    try:
-        return _box_arts(api.client_id, api.client_secret, ids)
-    except TwitchError:
-        return {}
+    found = {}
+    for start in range(0, len(ids), 100):          # Twitch takes 100 ids per request
+        try:
+            found.update(_box_arts(api.client_id, api.client_secret, ids[start:start + 100]))
+        except TwitchError:
+            pass
+    return found
 
 
 def _side_status(dot, title, sub):
@@ -122,6 +126,7 @@ def sidebar_connection(account_box=None, can_edit=True):
                       '<div class="w">Clip Studio</div>'
                       '<div class="s">Twitch trends &amp; clips</div></div></div>')
         api = _connection(can_edit)
+        _youtube(can_edit)
         if account_box:
             st.divider()
             account_box()
@@ -182,6 +187,87 @@ def _connection(can_edit=True):
     st.rerun()
 
 
+YOUTUBE_GUIDE = "https://console.cloud.google.com/apis/library/youtube.googleapis.com"
+
+
+def check_youtube_key(key):
+    """(True, "") if the key works, else (False, what to do about it). Costs 1 of the
+    10,000 free daily quota units."""
+    try:
+        response = requests.get("https://www.googleapis.com/youtube/v3/videos", params={
+            "part": "id", "chart": "mostPopular", "maxResults": 1, "regionCode": "US",
+            "key": key}, timeout=15)
+    except requests.RequestException as error:
+        return False, "Could not reach YouTube (%s)." % error
+    if response.status_code == 200:
+        return True, ""
+    try:
+        error = response.json().get("error") or {}
+    except ValueError:
+        error = {}
+    reason = ((error.get("errors") or [{}])[0].get("reason") or "")
+    detail = " ".join(str(d.get("reason", "")) for d in error.get("details") or [])
+    if reason == "keyInvalid" or "API_KEY_INVALID" in detail:
+        return False, "That key is not valid - copy it again from Google Cloud."
+    if reason in ("accessNotConfigured", "forbidden") or "SERVICE_DISABLED" in detail:
+        return False, ("YouTube Data API v3 is not turned on for this key's project. "
+                       "Open the API library, pick it, press Enable, wait a minute, retry.")
+    if "quota" in reason.lower():
+        return False, "This key's daily quota is used up - it resets at midnight Pacific time."
+    if "Blocked" in reason or "blocked" in (error.get("message") or ""):
+        return False, ("The key's restrictions block this app. Under the key's settings, set "
+                       "Application restrictions to None, and API restrictions to YouTube "
+                       "Data API v3.")
+    return False, "YouTube said: %s" % (error.get("message") or response.status_code)
+
+
+def _youtube(can_edit):
+    """The optional YouTube key: its status, and a box to add, test and remove it."""
+    from .trends_cli import youtube_key
+    key = youtube_key()
+    from_env = bool(os.environ.get("YOUTUBE_API_KEY", "").strip())
+    with st.expander("YouTube: %s" % ("on" if key else "off (optional)"),
+                     icon=":material/smart_display:"):
+        if key:
+            st.caption("✅ Key …%s %s. YouTube is part of trend research and Game research."
+                       % (escape(key[-4:]), "from YOUTUBE_API_KEY" if from_env else "saved"))
+        else:
+            st.caption("Adds YouTube's trending gaming videos and live gaming streams to the "
+                       "research. The key is free - [get one here](%s): create a project, "
+                       "enable **YouTube Data API v3**, then Credentials → Create API key."
+                       % YOUTUBE_GUIDE)
+        if not can_edit or from_env or is_hosted():
+            return
+        with st.form("youtube_key", border=False):
+            new = st.text_input("YouTube API key", type="password",
+                                placeholder="AIza…").strip()
+            go = st.form_submit_button("Save & test" if not key else "Replace & test",
+                                       width="stretch")
+        if go and new:
+            ok, problem = check_youtube_key(new)
+            if not ok:
+                st.error(problem)
+                return
+            _save_config(youtube_api_key=new)
+            st.rerun()
+        if key and st.button("Remove the key", key="yt_remove", width="stretch"):
+            _save_config(youtube_api_key=None)
+            st.rerun()
+
+
+def _save_config(**changes):
+    """Merge into data/config.json; None removes a setting."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    config = load_json(CONFIG_FILE, {})
+    config = config if isinstance(config, dict) else {}
+    for name, value in changes.items():
+        if value is None:
+            config.pop(name, None)
+        else:
+            config[name] = value
+    save_json(CONFIG_FILE, config)
+
+
 def start_job(kind, label, work):
     """Start a background run, or explain why not. Returns True if it started."""
     try:
@@ -203,7 +289,7 @@ def _minutes(seconds):
 
 
 @st.fragment(run_every=1.0)
-def progress_panel(kind, can_cancel=True):
+def progress_panel(kind, can_cancel=True, where=""):
     """Live status of the running job. Redraws itself every second until done."""
     job = jobs.latest(kind)
     if job is None:
@@ -217,7 +303,8 @@ def progress_panel(kind, can_cancel=True):
         return
 
     stopping = STOP.is_set()
-    with st.container(border=True, key="card_progress_%s" % kind):
+    # `where` keeps the widget keys apart when several tabs show the same job.
+    with st.container(border=True, key="card_progress_%s%s" % (kind, where)):
         top = st.columns([5, 1], vertical_alignment="center")
         with top[0]:
             ui_theme.html(
@@ -226,7 +313,7 @@ def progress_panel(kind, can_cancel=True):
                 '</div></div>' % (escape(job.label),
                                   "Stopping after the clips in flight" if stopping
                                   else "Running", _minutes(job.elapsed)))
-        if top[1].button("Stopping…" if stopping else "Cancel", key="cancel_%s" % kind,
+        if top[1].button("Stopping…" if stopping else "Cancel", key="cancel_%s%s" % (kind, where),
                          icon=":material/stop_circle:", width="stretch",
                          disabled=stopping or not can_cancel):
             job.cancel()

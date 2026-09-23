@@ -1,6 +1,6 @@
 """Turning a downloaded 16:9 clip into a 9:16 vertical Short (1080x1920).
 
-Two looks, because each suits different clips:
+Three looks, because each suits different clips:
 
   blur   the whole frame, scaled to the full width, over a blurred and
          zoomed copy of itself that fills the top and bottom. Nothing is cut
@@ -10,6 +10,13 @@ Two looks, because each suits different clips:
          punchier, but the sides are gone - fine for a fight in the middle of
          the screen, bad when the moment is in a corner or the killfeed.
 
+  split  the streamer's camera on top, the middle of the gameplay below - the
+         usual clip-channel look. Needs the camera's place, marked once per
+         streamer (facecams.py); a clip from a streamer with none marked
+         gets the blur look instead.
+
+Any look can have captions burned in (captions.py).
+
 Converting needs ffmpeg. The one on PATH is used when there is one (winget,
 choco and the gyan.dev builds all put it there); otherwise the copy bundled
 with the imageio-ffmpeg package, which is what a hosted server will use.
@@ -18,9 +25,12 @@ with the imageio-ffmpeg package, which is what a hosted server will use.
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
+from . import captions, facecams
 from .config import STOP
 from .download import name_tail
 from .util import say
@@ -41,6 +51,22 @@ FILTERS = {
         "[0:v]scale=-2:{h},crop={w}:{h},setsar=1[v]"
     ).format(w=WIDTH, h=HEIGHT),
 }
+
+CAM_HEIGHT = 640           # split look: camera on top, gameplay fills the rest
+
+
+def split_filter(box):
+    """Camera box (x, y, w, h as fractions) on top, the centre of the game below."""
+    x, y, w, h = box
+    game_h = HEIGHT - CAM_HEIGHT
+    return (
+        "[0:v]split=2[cam][game];"
+        "[cam]crop=iw*{w:.4f}:ih*{h:.4f}:iw*{x:.4f}:ih*{y:.4f},"
+        "scale={W}:{C}:force_original_aspect_ratio=increase,crop={W}:{C},setsar=1[cam];"
+        "[game]crop=ih*{W}/{G}:ih:(iw-ih*{W}/{G})/2:0,scale={W}:{G},setsar=1[game];"
+        "[cam][game]vstack=inputs=2[v]"
+    ).format(x=x, y=y, w=w, h=h, W=WIDTH, C=CAM_HEIGHT, G=game_h)
+
 
 _ffmpeg = None
 
@@ -64,25 +90,37 @@ def short_path(video_path):
     return video_path.parent / SHORTS_FOLDER / video_path.name
 
 
-def make_short(source, target, style="blur"):
-    """Convert one clip. Returns None on success, or a short reason on failure."""
+def make_short(source, target, style="blur", box=None, caption_file=None):
+    """Convert one clip. Returns None on success, or a short reason on failure.
+
+    `box` is the camera for the split look; `caption_file` an .ass file to burn in.
+    """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         return "ffmpeg not found"
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.stem + ".part.mp4")
+    graph = split_filter(box) if style == "split" and box else FILTERS.get(style, FILTERS["blur"])
+    out_label = "[v]"
+    workdir = None
+    if caption_file:
+        # ffmpeg's subtitles filter trips over Windows paths ("C:"), so it is run
+        # from the captions' folder and given the bare file name.
+        workdir = str(Path(caption_file).parent)
+        graph += ";[v]subtitles=filename=%s[vc]" % Path(caption_file).name
+        out_label = "[vc]"
     command = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-        "-filter_complex", FILTERS.get(style, FILTERS["blur"]),
-        "-map", "[v]", "-map", "0:a?",
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(Path(source).resolve()),
+        "-filter_complex", graph,
+        "-map", out_label, "-map", "0:a?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
-        str(partial),
+        str(Path(partial).resolve()),
     ]
     # No console window flashing up for every clip on Windows.
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        done = subprocess.run(command, capture_output=True, text=True,
+        done = subprocess.run(command, capture_output=True, text=True, cwd=workdir,
                               timeout=CONVERT_TIMEOUT, creationflags=flags)
     except subprocess.TimeoutExpired:
         partial.unlink(missing_ok=True)
@@ -106,7 +144,31 @@ def _existing_shorts(folder):
     return found
 
 
-def convert_all(jobs, manifest, output, style, workers=2):
+def _look(job, style, warned):
+    """The look for one clip: split needs the streamer's camera marked."""
+    if style != "split":
+        return style, None
+    box = facecams.region(job.streamer, job.broadcaster_id or None)
+    if box is None:
+        if job.streamer not in warned:
+            warned.add(job.streamer)
+            say("  No camera marked for %s - their Shorts use the blurred look. Mark it "
+                "on the Streamers page." % job.streamer)
+        return "blur", None
+    return "split", box
+
+
+def _captioned(job, source, folder):
+    """An .ass caption file for a clip in `folder`, or None (no speech, or no captions)."""
+    ass = Path(folder) / ("c%s.ass" % abs(hash(job.clip_id)))
+    try:
+        return ass if captions.make_captions(source, ass) else None
+    except Exception as error:      # captions are a bonus; the Short still gets made
+        say("  Captions skipped for %s (%s)" % (source.name, str(error)[:80]))
+        return None
+
+
+def convert_all(jobs, manifest, output, style, workers=2, with_captions=False):
     """Make a Short of every clip that landed; in "short" mode drop the 16:9 file.
 
     Runs after the downloads so a slow conversion never holds up a download.
@@ -134,18 +196,27 @@ def convert_all(jobs, manifest, output, style, workers=2):
         if source.exists():
             todo.append((job, source))
 
+    if with_captions and not captions.available():
+        say("Captions are off: faster-whisper is not installed (pip install faster-whisper).")
+        with_captions = False
     if todo:
         say("")
-        say("Making %d Short(s), 9:16 at %dx%d, style: %s..."
-            % (len(todo), WIDTH, HEIGHT, "blurred background" if style == "blur"
-               else "centre crop"))
-    counter, lock = [0], threading.Lock()
+        say("Making %d Short(s), 9:16 at %dx%d, style: %s%s..."
+            % (len(todo), WIDTH, HEIGHT, {"blur": "blurred background", "crop": "centre crop",
+                                          "split": "facecam + gameplay"}.get(style, style),
+               ", with captions" if with_captions else ""))
+    counter, lock, warned = [0], threading.Lock(), set()
+    caption_dir = tempfile.mkdtemp(prefix="clipdl-captions-") if with_captions else None
 
     def one(item):
         job, source = item
         if STOP.is_set():
             return None
-        reason = make_short(source, job.short, style)
+        look, box = _look(job, style, warned)
+        ass = _captioned(job, source, caption_dir) if caption_dir else None
+        reason = make_short(source, job.short, look, box, ass)
+        if ass:
+            ass.unlink(missing_ok=True)
         with lock:
             counter[0] += 1
         if reason:
@@ -157,6 +228,8 @@ def convert_all(jobs, manifest, output, style, workers=2):
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         failed = sum(1 for reason in pool.map(one, todo) if reason)
+    if caption_dir:
+        shutil.rmtree(caption_dir, ignore_errors=True)
 
     if output == "short":
         # Short-only: the 16:9 file was just the raw material. Keep it when its

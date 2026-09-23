@@ -61,6 +61,7 @@ OUTPUT_FORMATS = [
 SHORT_STYLES = [
     ("Blurred background - whole frame kept, nothing cut off", "blur"),
     ("Centre crop - fills the screen, the sides are cut off", "crop"),
+    ("Facecam on top, gameplay below - each streamer's camera marked once", "split"),
 ]
 
 # How long a clip should be to be worth editing with. Under ten seconds there

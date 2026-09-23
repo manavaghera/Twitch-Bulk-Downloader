@@ -23,6 +23,42 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   countdowns, 7- and 30-day movement, and a boom verdict for each.
 - RPM estimates by country and by game audience.
 
+**Game research** (StreamsCharts-style, across Twitch, Kick and YouTube)
+- Plain-language overview: what is happening right now, the most watched games with their
+  icons, platform split and change, biggest movers - and a full table for every number
+  (watch hours, peak/average viewers and streamers, viewers per streamer, share, change)
+  for live now / 24 hours / 7 days / 30 days.
+- Game page: a one-paragraph summary, the typical (median) streamer, viewers and streamers
+  over time, who is streaming it, how big its channels are, which languages watch it,
+  Steam best-seller rank in 20 countries, the best hours to stream it, whose clips get
+  watched, and the tags and title words streamers use (with Twitch Drops detection).
+- Where would I rank?: enter your usual viewers - see the games where you'd sit on the
+  first screen of the directory right now.
+- Best games to stream: where an ordinary streamer (not a top-5 star) still gets viewers.
+- Spikes & movers: games far above their normal for this hour, and the biggest gainers.
+- Languages: games whose audience in your language outnumbers its streamers.
+- Compare up to 5 games; game icons (Twitch category art) throughout the app.
+
+**Creator tools**
+- **Clip radar** - the clips taking off right now across the top 25-100 games, ranked by
+  views per hour, with ads and cheat spam filtered out. Pick and download in two clicks.
+- **Streamers** - follow the channels you clip: live now, when they usually stream, their
+  official schedule, their best clips this week. Keep a **permission list** (Allowed / Not
+  sure / Don't use) that every download respects, and mark each streamer's **camera spot**
+  with a live preview.
+- **Shorts that are ready to post** - three looks (blurred background, centre crop, and
+  **facecam on top + gameplay below**), optional **burned-in captions** made on your PC
+  (free speech to text, no API), and a **.txt of title ideas, a description with credit,
+  and hashtags** (including the game's trending tags) beside every video.
+- **Release calendar** - upcoming launches from Steam wishlists on a month calendar with
+  countdowns, and an **.ics file** that puts them in Google Calendar / Outlook / iPhone
+  with a reminder a few days before.
+- **YouTube Shorts demand** - on each game page: how many views Shorts of that game got
+  this week, a typical Short's views, and the top ones (needs the YouTube key).
+- **Autopilot** - every day: pick the rising games (or your own list, or the clip radar),
+  download their best new clips, make the Shorts and title files, and leave a report.
+  Runs from the page or on a daily schedule in Windows Task Scheduler.
+
 **Access control**
 - Optional ID/password sign-in with owner-created accounts only (no sign-up), for the
   whole page or just for downloads.
@@ -79,11 +115,54 @@ hidden and stored only as salted PBKDF2 hashes in `data/users.json`):
 By default the whole page needs a sign-in. To protect only downloads, add
 `"login_required_for": "downloads"` to `data/config.json` (or set `CLIPDL_LOGIN=downloads`).
 
-## Optional: YouTube signal
+## Game research data
 
-Add a free YouTube Data API v3 key to `data/config.json` as `"youtube_api_key"`
-(or the `YOUTUBE_API_KEY` environment variable) to include YouTube's trending gaming
-videos in the research. Uses about 8 of the 10,000 free daily quota units per run.
+No platform publishes its past, so - like StreamsCharts - the app records who is live
+every 15 minutes into `data/stats.db` and builds watch hours, peaks and averages from
+that. History starts the first time you open Game research and fills 24 h / 7 d / 30 d
+as it runs; the page shows how much of each period is recorded. Every 15 minutes it reads
+the top 10,000 Twitch streams and ~1,000 Kick streams, and counts every channel of a few
+big games in rotation (and of any game you *track*). History older than 7 days is thinned
+to hourly; everything older than 35 days is dropped.
+
+The page records while it is open. To record around the clock without it:
+
+```bash
+.venv\Scripts\python.exe scripts\collect_stats.py
+```
+
+(or `--once`, scheduled every 15 minutes in Windows Task Scheduler). Running both at once
+is safe. Kick is read from the list its own website uses, which is not an official API and
+may change.
+
+## Captions and the Autopilot
+
+Captions use faster-whisper, installed with the requirements; the speech model (~150 MB)
+downloads on first use and runs on the CPU (about a second per clip). The Autopilot saves
+into `<download folder>\Autopilot\<date>`; scheduled runs log to `datautopilot.log`.
+Run it by hand with:
+
+```bash
+.venv\Scripts\python.exe scriptsutopilot.py
+```
+
+## Optional: YouTube
+
+A free YouTube Data API v3 key adds YouTube's trending gaming videos to Trend research and
+live YouTube gaming streams to Game research.
+
+1. Open <https://console.cloud.google.com> and sign in with any Google account.
+2. Top bar → project picker → **New project** → any name → **Create**, then select it.
+3. **APIs & Services → Library** → search **YouTube Data API v3** → **Enable**.
+4. **APIs & Services → Credentials → Create credentials → API key**, and copy it.
+5. Optional but wise: **Edit API key → API restrictions → Restrict key → YouTube Data
+   API v3** (leave *Application restrictions* on *None*).
+6. In Clip Studio's sidebar, open **YouTube**, paste the key, press **Save & test**.
+   (Or put `"youtube_api_key": "..."` in `data/config.json`, or set `YOUTUBE_API_KEY`.)
+
+It costs nothing: the free quota is 10,000 units a day, and the app uses about 5,000 -
+an hourly live-stream check (~200 units) plus ~8 per trend research run. No billing
+account is needed.
 
 ## Hosting
 
@@ -96,6 +175,7 @@ Set these as environment variables or in `.streamlit/secrets.toml` (never commit
 | `[users]` table | accounts: `alice = "<hash>"`, hash from `manage_users.py hash` |
 | `CLIPDL_LOGIN` | `site` (default) or `downloads` |
 | `YOUTUBE_API_KEY` | optional |
+| `CLIPDL_NO_COLLECTOR=1` | don't record stats in this copy (e.g. several copies behind one host) |
 
 A hosted page with no accounts (and no legacy `APP_PASSWORD`) stays locked by design,
 so strangers cannot run downloads on your server. Set `CLIPDL_PUBLIC=1` only if you

@@ -23,9 +23,14 @@ class TwitchAPI:
     renews it on expiry or on any HTTP 401, and retries on 429/5xx/network hiccups.
     """
 
-    def __init__(self, client_id, client_secret):
+    def __init__(self, client_id, client_secret, stop=None, log=None):
         self.client_id = client_id
         self.client_secret = client_secret
+        # The Cancel switch and the printer it answers to. The background stats
+        # collector passes its own, so cancelling a download cannot stall it
+        # and its retries do not end up in a download's log.
+        self.stop = stop or STOP
+        self.log = log or say
         self.session = requests.Session()
         self._token = None
         self._expires_at = 0.0
@@ -49,7 +54,7 @@ class TwitchAPI:
 
     def _fetch_token(self):
         """Client credentials flow: swap id+secret for an app access token."""
-        say("Getting a Twitch app access token...")
+        self.log("Getting a Twitch app access token...")
         try:
             response = self.session.post(
                 OAUTH_URL,
@@ -154,9 +159,9 @@ class TwitchAPI:
         if attempt >= HTTP_ATTEMPTS:
             return
         wait = min(2 ** attempt, 30)
-        say("  %s - retrying in %d s (attempt %d of %d)."
+        self.log("  %s - retrying in %d s (attempt %d of %d)."
             % (reason, wait, attempt + 1, HTTP_ATTEMPTS))
-        STOP.wait(wait)
+        self.stop.wait(wait)
 
     def get(self, path, params=None):
         """GET a Helix endpoint and return the parsed JSON body."""
@@ -164,7 +169,7 @@ class TwitchAPI:
         refreshed = False
         last_error = "unknown error"
         for attempt in range(1, HTTP_ATTEMPTS + 1):
-            if STOP.is_set():
+            if self.stop.is_set():
                 raise TwitchError("Cancelled.")
             try:
                 response = self.session.get(
@@ -186,14 +191,14 @@ class TwitchAPI:
             # An expired or revoked token: get a new one and try once more.
             if response.status_code == 401 and not refreshed:
                 refreshed = True
-                say("  Access token no longer accepted - requesting a fresh one.")
+                self.log("  Access token no longer accepted - requesting a fresh one.")
                 self.token(force=True)
                 continue
 
             if response.status_code == 429:
                 wait = self._retry_after(response)
-                say("  Twitch rate limit reached; waiting %.0f s." % wait)
-                STOP.wait(wait)
+                self.log("  Twitch rate limit reached; waiting %.0f s." % wait)
+                self.stop.wait(wait)
                 continue
 
             if response.status_code >= 500:

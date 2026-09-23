@@ -150,6 +150,79 @@ CSS = """
   .cs-lb .hype { justify-content: flex-start; }
 }
 
+/* ---- KPI tiles: a grid that wraps instead of cutting numbers off -------- */
+.cs-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;
+  margin: 4px 0 10px; }
+.cs-kpi { background: #16161B; border: 1px solid #26262d; border-radius: 12px; padding: 11px 14px; }
+.cs-kpi .l { color: #8C8C99; font-size: .76rem; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.cs-kpi .v { font-size: 1.45rem; font-weight: 800; line-height: 1.25; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-kpi .d { font-size: .74rem; font-weight: 700; margin-top: 2px; color: #ADADB8; }
+.cs-kpi .d.up { color: #3ee6ad; }
+.cs-kpi .d.down { color: #ff8a8a; }
+
+/* ---- ranked rows with game icons (portrait box art) ------------------------ */
+.cs-lb.portrait { grid-template-columns: 34px 42px minmax(0, 1fr) auto; padding: 8px 14px 8px 8px; }
+.cs-lb.portrait img, .cs-lb.portrait .ph { width: 42px; height: 56px; border-radius: 6px; }
+.cs-lb .side .big + .left { white-space: nowrap; }
+.cs-lb:not(.portrait) .sub { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; }
+.cs-lb.portrait .sub { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; line-height: 1.35; }
+.cs-mini { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cs-mini div { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 9px;
+  align-items: center; font-size: .85rem; }
+.cs-mini img, .cs-mini .ph { width: 22px; height: 29px; border-radius: 4px; object-fit: cover; }
+.cs-mini .ph { display: grid; place-items: center; font-size: .55rem; font-weight: 800;
+  background: linear-gradient(135deg, #3a2a5c, #1f1f27); }
+.cs-mini span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-mini b { font-weight: 700; color: #ADADB8; }
+.cs-lb.portrait .ph { display: grid; place-items: center; font-weight: 800; font-size: .8rem;
+  color: #fff; }
+.cs-lb .pos.small { font-size: 1rem; }
+.cs-lb .big { font-weight: 800; font-size: 1.12rem; }
+.cs-plat { display: inline-flex; align-items: center; gap: 5px; font-size: .72rem; font-weight: 600;
+  color: #ADADB8; }
+.cs-plat::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.cs-plat.twitch { --c: #3987e5; } .cs-plat.kick { --c: #d95926; } .cs-plat.youtube { --c: #199e70; }
+.cs-good { font-size: .72rem; font-weight: 700; padding: 2px 7px; border-radius: 6px;
+  background: rgba(0,214,143,.14); color: #3ee6ad; }
+.cs-warn { font-size: .72rem; font-weight: 700; padding: 2px 7px; border-radius: 6px;
+  background: rgba(250,178,25,.14); color: #fbc54f; }
+.cs-info { font-size: .72rem; font-weight: 700; padding: 2px 7px; border-radius: 6px;
+  background: rgba(145,70,255,.16); color: #c8a6ff; }
+
+/* ---- "what's happening" box ------------------------------------------------ */
+.cs-insights { border-radius: 14px; padding: 14px 18px; margin: 4px 0 12px;
+  background: linear-gradient(135deg, rgba(145,70,255,.14), rgba(145,70,255,.04));
+  border: 1px solid rgba(145,70,255,.28); }
+.cs-insights .h { font-weight: 800; font-size: .95rem; margin-bottom: 6px; }
+.cs-insights .l { display: flex; gap: 10px; padding: 4px 0; font-size: .92rem; line-height: 1.45;
+  color: #DEDEE3; }
+.cs-insights .l b { color: #fff; }
+
+/* ---- game header ----------------------------------------------------------- */
+.cs-ghero { display: flex; gap: 18px; align-items: center; padding: 16px; border-radius: 16px;
+  background: linear-gradient(135deg, #1b1330, #141418 70%); border: 1px solid #2c2440;
+  margin-bottom: 10px; }
+.cs-ghero img, .cs-ghero .ph { width: 84px; height: 112px; border-radius: 10px; flex: none;
+  object-fit: cover; box-shadow: 0 8px 22px rgba(0,0,0,.5); }
+.cs-ghero .ph { display: grid; place-items: center; font-weight: 800; font-size: 1.6rem;
+  background: linear-gradient(135deg, #3a2a5c, #1f1f27); }
+.cs-ghero .n { font-weight: 800; font-size: 1.5rem; line-height: 1.2; }
+.cs-ghero .c { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.cs-ghero .t { color: #CFCFD6; font-size: .93rem; line-height: 1.5; }
+.cs-ghero .t b { color: #fff; }
+
+/* ---- chart legend with icons ----------------------------------------------- */
+.cs-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 6px; }
+.cs-legend span { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 5px;
+  border-radius: 999px; background: #18181d; border: 1px solid #26262d; font-size: .82rem;
+  font-weight: 600; }
+.cs-legend img { width: 20px; height: 27px; border-radius: 4px; object-fit: cover; }
+.cs-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
 /* ---- empty states -------------------------------------------------------- */
 .cs-empty { text-align: center; padding: 34px 20px; border: 1px dashed #2f2f37;
   border-radius: 14px; color: #8C8C99; }
@@ -283,3 +356,86 @@ def leaderboard(rows):
                escape(row.get("left", "")), row.get("bar", 0),
                max(2, min(100, int(row.get("bar", 0))))))
     html('<div class="cs-board">%s</div>' % "".join(out))
+
+
+def kpis(items):
+    """KPI tiles: [(label, value, delta text or None, help or None)]. A delta
+    starting with + or - is coloured and carries an arrow, never colour alone."""
+    tiles = []
+    for label, value, delta, tip in items:
+        delta_html = ""
+        if delta:
+            kind = "up" if delta.startswith("+") else "down" if delta.startswith("-") else ""
+            arrow = {"up": "▲ ", "down": "▼ "}.get(kind, "")
+            delta_html = '<div class="d %s">%s%s</div>' % (kind, arrow, escape(delta))
+        tiles.append('<div class="cs-kpi" title="%s"><div class="l">%s</div><div class="v">%s'
+                     '</div>%s</div>' % (escape(tip or label, quote=True), escape(label),
+                                         escape(str(value)), delta_html))
+    html('<div class="cs-kpis">%s</div>' % "".join(tiles))
+
+
+def _icon(url, name, cls="ph"):
+    if url:
+        return '<img src="%s" alt="" loading="lazy">' % escape(url, quote=True)
+    return '<div class="%s">%s</div>' % (cls, escape(initials(name)))
+
+
+def ranked(rows, wide=False):
+    """Ranked rows with a game icon (or, wide=True, a 16:9 thumbnail). rows: dicts
+    with pos, icon, name, url?, sub, chips [(text, css class)], value, value_sub,
+    bar (0-100 or None)."""
+    out = []
+    for row in rows:
+        name = escape(row["name"])
+        if row.get("url"):
+            name = '<a href="%s" target="_blank" rel="noopener">%s</a>' % (
+                escape(row["url"], quote=True), name)
+        chips = "".join('<span class="%s">%s</span>' % (cls, escape(text))
+                        for text, cls in row.get("chips") or [])
+        bar = ""
+        if row.get("bar") is not None:
+            bar = '<div class="hype"><div class="cs-bar"><i style="width:%d%%"></i></div></div>' % (
+                max(2, min(100, int(row["bar"]))))
+        pos = str(row.get("pos", ""))
+        out.append(
+            '<div class="cs-lb%s%s"><div class="pos%s">%s</div>%s'
+            '<div style="min-width:0"><div class="nm">%s</div><div class="sub">%s</div>'
+            '<div class="chips">%s</div></div>'
+            '<div class="side"><div class="big">%s</div><div class="left">%s</div>%s</div></div>'
+            % ("" if wide else " portrait", " top3" if pos.isdigit() and int(pos) <= 3 else "",
+               " small" if len(pos) > 2 else "", escape(pos), _icon(row.get("icon"), row["name"]),
+               name, escape(row.get("sub", "")), chips, escape(str(row.get("value", ""))),
+               escape(row.get("value_sub", "")), bar))
+    html('<div class="cs-board">%s</div>' % "".join(out))
+
+
+def insights(lines, title="What's happening"):
+    """A short box of plain sentences: [(emoji, text with <b> tags - escape the rest)]."""
+    if not lines:
+        return
+    html('<div class="cs-insights"><div class="h">%s</div>%s</div>' % (escape(title), "".join(
+        '<div class="l"><span>%s</span><span>%s</span></div>' % (emoji, text)
+        for emoji, text in lines)))
+
+
+def game_hero(icon, name, story, chips):
+    chip_html = "".join('<span class="%s">%s</span>' % (cls, escape(text)) for text, cls in chips)
+    html('<div class="cs-ghero">%s<div style="min-width:0"><div class="n">%s</div>'
+         '<div class="c">%s</div><div class="t">%s</div></div></div>'
+         % (_icon(icon, name), escape(name), chip_html, story))
+
+
+def legend(items):
+    """A legend with icons: [(colour hex, icon url or "", name)]."""
+    html('<div class="cs-legend">%s</div>' % "".join(
+        '<span><i style="background:%s"></i>%s%s</span>' % (
+            escape(color, quote=True),
+            '<img src="%s" alt="">' % escape(icon, quote=True) if icon else "", escape(name))
+        for color, icon, name in items))
+
+
+def mini_list(items):
+    """A compact list: [(icon url or "", name, value text)]."""
+    html('<div class="cs-mini">%s</div>' % "".join(
+        '<div>%s<span>%s</span><b>%s</b></div>' % (_icon(icon, name), escape(name), escape(value))
+        for icon, name, value in items))

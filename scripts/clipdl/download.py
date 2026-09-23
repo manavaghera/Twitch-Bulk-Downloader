@@ -23,6 +23,7 @@ class DownloadJob:
         self.url = clip.get("url") or ""
         self.title = clip.get("title") or ""
         self.streamer = clip.get("broadcaster_name") or "unknown"
+        self.broadcaster_id = clip.get("broadcaster_id") or ""
         self.views = clip.get("view_count", 0)
         self.created_at = clip.get("created_at", "")
         self.path = path            # where we want the .mp4

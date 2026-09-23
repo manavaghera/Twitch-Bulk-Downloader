@@ -97,3 +97,14 @@ def sidebar_box():
             st.rerun()
     elif st.button("Sign in", key="sign_in_side", icon=":material/login:", width="stretch"):
         download_dialog()
+
+
+def may_download(key):
+    """True when this browser may download. When a sign-in is needed first, shows
+    a sign-in button in the download button's place and returns False."""
+    if not needs_login():
+        return True
+    if st.button("Sign in to download", key=key, icon=":material/lock:", type="primary",
+                 width="stretch"):
+        download_dialog()
+    return False

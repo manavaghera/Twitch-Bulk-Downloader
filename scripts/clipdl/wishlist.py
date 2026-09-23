@@ -371,4 +371,6 @@ def scan(api, web=None):
     history_days = compare_with_history(games, snapshots, now)
     save_snapshot(games, snapshots, now)
     rate(games)
+    from .releases import save_scan
+    save_scan(games)                        # the Releases page reads this
     return {"games": games, "history_days": history_days, "sources": sources}

@@ -44,8 +44,8 @@ CHART_COUNTRIES = [
     ("FR", "France"), ("ES", "Spain"), ("IT", "Italy"), ("PL", "Poland"),
     ("SE", "Sweden"),
 ]
-CHART_DEPTH = 25           # how far down each country's chart to read
-MOST_PLAYED_DEPTH = 60     # how far down the most-played chart to read
+CHART_DEPTH = 50           # how far down each country's chart to read
+MOST_PLAYED_DEPTH = 100    # how far down the most-played chart to read (all of it)
 
 # Wikipedia editions read, standing in for the US/UK plus the two biggest
 # non-English European audiences.
@@ -59,10 +59,11 @@ class WebClient:
     throttle anonymous-looking traffic, hence the explicit User-Agent.
     """
 
-    def __init__(self, attempts=4):
+    def __init__(self, attempts=4, stop=None):
         self.session = requests.Session()
         self.session.headers["User-Agent"] = USER_AGENT
         self.attempts = attempts
+        self.stop = stop or STOP        # see TwitchAPI.stop
 
     @staticmethod
     def _retry_after(response, attempt):
@@ -75,12 +76,12 @@ class WebClient:
     def get_json(self, url, params=None):
         """GET and parse JSON. Returns None on any failure - callers degrade."""
         for attempt in range(1, self.attempts + 1):
-            if STOP.is_set():
+            if self.stop.is_set():
                 return None
             try:
                 response = self.session.get(url, params=params, timeout=HTTP_TIMEOUT)
             except requests.RequestException:
-                STOP.wait(attempt * 2)
+                self.stop.wait(attempt * 2)
                 continue
             if response.status_code == 200:
                 try:
@@ -91,10 +92,10 @@ class WebClient:
                 return None
             if response.status_code == 429:
                 # Wikipedia in particular says exactly how long to back off.
-                STOP.wait(self._retry_after(response, attempt))
+                self.stop.wait(self._retry_after(response, attempt))
                 continue
             if response.status_code >= 500:
-                STOP.wait(min(attempt * 3, 15))
+                self.stop.wait(min(attempt * 3, 15))
                 continue
             return None
         return None

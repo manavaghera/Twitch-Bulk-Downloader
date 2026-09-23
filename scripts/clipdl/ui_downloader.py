@@ -4,7 +4,7 @@ import os
 
 import streamlit as st
 
-from . import jobs, ui_login, ui_theme
+from . import captions, jobs, permissions, titles, ui_login, ui_theme
 from .api import TwitchError
 from .config import (DOWNLOAD_ROOT, MAX_CLIP_SECONDS, MAX_CLIPS, MIN_CLIP_SECONDS,
                      OUTPUT_FORMATS, QUALITIES, RANKINGS, SHORT_STYLES, STOP,
@@ -29,8 +29,14 @@ FORMAT_NOTES = {
              "folder. Converting takes about as long as the clip itself.",
     "both": "The 16:9 video plus a 1080×1920 vertical Short of it, in a Shorts sub-folder.",
 }
-STYLE_LABELS = {"blur": "Blurred background", "crop": "Centre crop"}
-STYLE_NOTES = {"blur": "Whole frame kept, nothing cut off.",
+STYLE_LABELS = {"blur": "Blurred background", "crop": "Centre crop",
+                "split": "Facecam + gameplay"}
+STREAMER_LABELS = {"not_blocked": "Skip 'Don't use'", "allowed_only": "Only 'Allowed'",
+                   "any": "Anyone"}
+STYLE_NOTES = {"split": "Streamer's camera on top, gameplay below - the classic clip look. "
+                        "Uses the camera spot you mark per streamer on the Streamers page; "
+                        "streamers without one get the blurred look.",
+               "blur": "Whole frame kept, nothing cut off.",
                "crop": "Fills the screen; the sides are cut off."}
 QUALITY_LABELS = {QUALITIES[0][1]: "Up to 1080p", QUALITIES[1][1]: "Maximum (up to 4K)"}
 WINDOW_LABELS = {24: "24 hours", 24 * 7: "7 days", 24 * 30: "30 days"}
@@ -40,10 +46,10 @@ LENGTH_DEFAULT = "%d–%d s" % (MIN_CLIP_SECONDS, MAX_CLIP_SECONDS)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def top_categories(client_id, client_secret):
-    """Twitch's top 20 right now, cached for five minutes."""
+    """Twitch's top 100 right now, cached for five minutes."""
     api = twitch_client(client_id, client_secret)
     return [{"id": g["id"], "name": g["name"], "box_art_url": g.get("box_art_url", "")}
-            for g in api.top_games(20)]
+            for g in api.top_games(100)]
 
 
 def trend_label(trend, rising):
@@ -56,7 +62,7 @@ def game_options(api):
     options, seen = [], set()
     trend_job = jobs.latest("trends")
     if trend_job and trend_job.result:
-        picks = trend_job.result["rising"][:10] + trend_job.result["popular"][:10]
+        picks = trend_job.result["rising"][:25] + trend_job.result["popular"][:50]
         for trend in picks:
             if trend.id and trend.id not in seen:
                 seen.add(trend.id)
@@ -165,7 +171,18 @@ def form_filters(game):
                                       help="Skips caster desks, watch parties and chat clips.")
             top_up_lengths = st.toggle("Too few? Top up with other lengths")
             top_up_foreign = st.toggle("Still too few? Top up with non-English clips")
-    return min_s, max_s, gameplay_only, history_mode, top_up_lengths, top_up_foreign
+        marked = permissions.entries()
+        streamer_mode = st.segmented_control(
+            "Streamers (your permission list)", list(STREAMER_LABELS),
+            format_func=STREAMER_LABELS.get, default="not_blocked", required=True,
+            key="dl_streamers",
+            help="Mark streamers Allowed / Don't use on the Streamers page. Reposting clips "
+                 "without permission is how clip channels get copyright strikes.")
+        ui_theme.note("Your list: <b>%d</b> allowed, <b>%d</b> marked don't use." % (
+            sum(1 for e in marked if e.get("status") == "allowed"),
+            sum(1 for e in marked if e.get("status") == "blocked")))
+    return (min_s, max_s, gameplay_only, history_mode, top_up_lengths, top_up_foreign,
+            streamer_mode)
 
 
 def form_output():
@@ -184,16 +201,24 @@ def form_output():
                 help="Every clip comes down at the most it has, up to the cap. Twitch keeps a "
                      "clip at the resolution the stream was broadcast in, so clips above 1080p "
                      "only exist for streamers broadcasting in 1440p or 4K.")
-        short_style = "blur"
+        short_style, with_captions = "blur", False
         if output != "video":
             short_style = st.segmented_control(
                 "How the 16:9 clip fills the 9:16 screen", [key for _, key in SHORT_STYLES],
                 format_func=STYLE_LABELS.get, default="blur", required=True, key="dl_style")
             ui_theme.note(STYLE_NOTES[short_style])
+            ready = captions.available()
+            with_captions = st.toggle(
+                "Burn in captions", value=False, key="dl_captions", disabled=not ready,
+                help="Speech to text on this PC (free, no API): big word-by-word captions "
+                     "in the lower third. About a second per clip.")
+            if not ready:
+                st.caption("Captions need one extra install: `.venv\\Scripts\\pip install "
+                           "faster-whisper`, then restart the page.")
             if not find_ffmpeg():
                 st.error("Shorts need ffmpeg, which is not installed. Run "
                          "`winget install Gyan.FFmpeg`, then restart this page.")
-    return output, short_style, max_height
+    return output, short_style, max_height, with_captions
 
 
 def form_folder(game, output):
@@ -229,9 +254,9 @@ def render_form(api):
     left, right = st.container(key="dl_layout").columns([1.75, 1], gap="large")
     with left:
         game, wanted, hours, ranking = form_game(api)
-        min_s, max_s, gameplay_only, history_mode, top_up_lengths, top_up_foreign = \
-            form_filters(game)
-        output, short_style, max_height = form_output()
+        (min_s, max_s, gameplay_only, history_mode, top_up_lengths, top_up_foreign,
+         streamer_mode) = form_filters(game)
+        output, short_style, max_height, with_captions = form_output()
         root, per_game, problem, as_zip, target, hosted = form_folder(game, output)
 
     window_label = next(label for label, h in TIME_WINDOWS if h == hours)
@@ -256,6 +281,10 @@ def render_form(api):
                  ("Length", length + (", gameplay only" if gameplay_only else "")),
                  ("Output", "%s · %s" % (FORMAT_LABELS[output].split(" ", 1)[1],
                                          QUALITY_LABELS[max_height])),
+                 ("Extras", ", ".join(x for x in (
+                     STYLE_LABELS[short_style].lower() if output != "video" else "",
+                     "captions" if with_captions else "", "title ideas (.txt)") if x)),
+                 ("Streamers", STREAMER_LABELS[streamer_mode]),
                  ("Save to", str(target) if target else "-"),
                  ("Delivery", "folder + .zip" if as_zip else "folder")])
             locked = ui_login.needs_login()
@@ -293,7 +322,8 @@ def render_form(api):
 
     request = DownloadRequest(game, wanted, (window_label, hours), (ranking_label, ranking),
                               min_s, max_s, gameplay_only, history_mode, output, short_style,
-                              max_height, root, per_game)
+                              max_height, root, per_game, captions=with_captions,
+                              streamer_mode=streamer_mode)
     answers = {"lengths": top_up_lengths, "non_english": top_up_foreign}
 
     def work():
@@ -318,7 +348,9 @@ def render_result(result):
         total_bytes += (video.stat().st_size if video else 0) + \
             (short.stat().st_size if short else 0)
         row = {"#": job.index, "Streamer": job.streamer, "Title": job.title,
-               "Views": job.views, "Status": status or "not started"}
+               "Views": job.views, "Status": status or "not started",
+               "Title idea": titles.suggest(job.title, job.streamer, job.game_name,
+                                            clip_url=job.url)["titles"][0]}
         if result.request.output != "short":
             row["Video"] = human_size(video.stat().st_size) if video else ""
         if result.request.output != "video":

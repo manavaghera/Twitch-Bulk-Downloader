@@ -27,7 +27,9 @@ import streamlit as st  # noqa: E402
 st.set_page_config(page_title="Clip Studio", page_icon="🎮", layout="wide",
                    initial_sidebar_state="expanded")
 
-from clipdl import jobs, ui_common, ui_downloader, ui_login, ui_theme, ui_trends  # noqa: E402
+from clipdl import (jobs, ui_autopilot, ui_common, ui_downloader, ui_login,  # noqa: E402
+                    ui_radar, ui_releases, ui_research, ui_streamers, ui_theme, ui_trends)
+from clipdl import releases  # noqa: E402
 from clipdl.trends_cli import youtube_key  # noqa: E402
 
 ui_theme.apply()
@@ -41,13 +43,19 @@ chips = [("Twitch connected", "ok") if api else ("Twitch not connected", "bad"),
          ("YouTube signals on", "ok") if youtube_key() else ("YouTube signals off", "")]
 running = jobs.running()
 chips.append(("Running: %s" % running.label, "live") if running else ("Ready", "ok"))
+launches = releases.load()
+soon = releases.this_week(launches["games"]) if launches else []
+if soon:
+    chips.append(("%d game launch%s this week - see Releases" % (
+        len(soon), "" if len(soon) == 1 else "es"), "live"))
 ui_theme.hero("🎮 Clip <span>Studio</span>",
               "Find the games blowing up in the US and Europe this week, then pull their "
               "best Twitch clips as ready-to-edit videos or vertical Shorts.", chips)
 
-trends_tab, download_tab = st.tabs(["📈  Trend research", "⬇️  Clip downloader"],
-                                   key="main_tab", on_change="rerun")
-with trends_tab:
-    ui_trends.render(api)
-with download_tab:
-    ui_downloader.render(api)
+tabs = st.tabs(["📈  Trend research", "🔬  Game research", "📡  Clip radar", "👀  Streamers",
+                "📅  Releases", "⬇️  Clip downloader", "🤖  Autopilot"],
+               key="main_tab", on_change="rerun")
+for tab, page in zip(tabs, (ui_trends, ui_research, ui_radar, ui_streamers, ui_releases,
+                            ui_downloader, ui_autopilot)):
+    with tab:
+        page.render(api)

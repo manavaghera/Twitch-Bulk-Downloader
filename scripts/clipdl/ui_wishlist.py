@@ -79,7 +79,7 @@ def _countdown(game):
 def render_top(games, days):
     """The top 10 or 20 of Steam's most-wishlisted chart, in chart order."""
     st.markdown("##### 🏆 Most wishlisted on Steam right now")
-    size = st.segmented_control("Show", (10, 20), format_func="Top {}".format,
+    size = st.segmented_control("Show", (10, 20, 50, 100), format_func="Top {}".format,
                                 default=10, required=True, key="wl_top",
                                 label_visibility="collapsed")
     rows = []
@@ -144,13 +144,14 @@ def render(found):
                "wishlist rank, IGDB hypes and Wikipedia reach, nudged by which way they move.")
 
     rows = [{
-        "Wishlist #": g.rank, "Game": g.name, "Verdict": VERDICTS[g.verdict(days)],
+        "Wishlist #": g.rank, " ": g.art or None, "Game": g.name, "Verdict": VERDICTS[g.verdict(days)],
         "Hype": g.score(days), "Releases": g.release_text(), "Days to go": _out_in(g),
         "Rank move": _rank_move(g, days), "Wikipedia views": g.wiki_views(days) or None,
         "Wikipedia %": _pct(g.wiki_growth(days)), "IGDB hypes": g.hypes or None,
         "Genre": ", ".join(g.tags[:3]), "Publisher": g.publisher, "Steam": g.store_url,
     } for g in sorted(shown, key=lambda g: g.rank)]
     st.dataframe(rows, hide_index=True, width="stretch", column_config={
+        " ": st.column_config.ImageColumn(" ", width="small"),
         "Hype": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d"),
         "Wikipedia views": st.column_config.NumberColumn(
             "Wiki views (%dd)" % days, format="localized"),
