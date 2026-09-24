@@ -9,19 +9,16 @@ answers by asking and the web page answers from the boxes ticked up front.
 
 import time
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from .api import TwitchError
-from .config import (DATA_DIR, DOWNLOAD_ROOT, LANG_FILE, MANIFEST_FILE, MAX_HEIGHT,
-                     OUTPUT_FORMATS, SHORT_STYLES, STOP, TARGET_LANGUAGE,
-                     VELOCITY_MIN_SCAN, VELOCITY_OVERSCAN, VOD_FILE, quality_text)
-from . import permissions, titles
+from .config import DATA_DIR, DOWNLOAD_ROOT, MANIFEST_FILE, MAX_HEIGHT, STOP, VOD_FILE
+from . import shortfall, timing, titles
 from .download import build_jobs, next_free_number, run_downloads
-from .filter import (classify_clip, clip_age_hours, collect_clips, ranker,
-                     resolve_stream_titles)
+from .filter import classify_clip, clip_age_hours, resolve_stream_titles
 from .folders import game_folder
 from .manifest import Manifest
-from .report import report, report_filtered, report_shortfall
+from .report import report, report_shortfall
 from .shorts import SHORTS_FOLDER, convert_all, find_ffmpeg
 from .util import human_size, load_json, sanitize, save_json, say
 
@@ -34,7 +31,7 @@ class DownloadRequest:
     def __init__(self, game, wanted, window, ranking, min_seconds, max_seconds,
                  gameplay_only=True, history_mode="new", output="video",
                  short_style="blur", max_height=MAX_HEIGHT, save_root=None,
-                 per_game=True, captions=False, streamer_mode="not_blocked"):
+                 per_game=True, captions=False, streamer_mode="not_blocked", min_height=0):
         self.game = game                        # a Twitch category dict
         self.wanted = wanted
         self.window_label, self.window_hours = window
@@ -44,7 +41,9 @@ class DownloadRequest:
         self.history_mode = history_mode        # "new" or "include"
         self.output = output                    # "video", "short" or "both"
         self.short_style = short_style          # "blur" or "crop"
-        self.max_height = max_height            # 1080, or 0 for no cap
+        # A minimum above the cap would throw away the very clips it asks for.
+        self.min_height = min_height            # the least a clip must have; 0 = any
+        self.max_height = 0 if min_height > (max_height or 0) > 0 else max_height
         self.save_root = save_root or DOWNLOAD_ROOT
         self.per_game = per_game                # a sub-folder per game?
         self.captions = captions                # burn captions into the Shorts?
@@ -117,148 +116,44 @@ def known_clip_count(game_name):
     return len(Manifest(MANIFEST_FILE).known_ids(game_name))
 
 
-def offer_out_of_range(chosen, buckets, missing, request, rank_key, confirm):
-    """Offer the clips held back for being the wrong length. Returns how many were added."""
-    if not buckets.out_of_range or missing <= 0:
-        return 0
-
-    say("There are %d clip(s) outside %d-%d seconds: %d shorter, %d longer."
-        % (len(buckets.out_of_range), request.min_seconds, request.max_seconds,
-           buckets.too_short, buckets.too_long))
-    if not confirm("Top up the remaining %d with those?" % missing, "lengths"):
-        return 0
-
-    buckets.out_of_range.sort(key=rank_key, reverse=True)
-    filler = buckets.out_of_range[:missing]
-    chosen.extend(filler)
-    say("Added %d clip(s) of other lengths." % len(filler))
-    return len(filler)
-
-
 def run_session(api, request, confirm):
-    """Search, filter, rank and download. `confirm(question, kind)` -> bool.
+    """Search, ask how to fill any shortfall, then download.
 
-    `kind` is "lengths" or "non_english", so a caller that decided in advance
-    can answer without reading the question.
+    `confirm(question, kind)` -> bool is asked once for each way to fill a
+    shortfall that would add clips - kind "older", "lengths", "non_english" or
+    "talking" - so a caller that decided in advance can answer without reading.
     """
-    wanted, game_name = request.wanted, request.game_name
+    if not ffmpeg_ready(request):
+        return DownloadResult(1, request=request)
+    searching = time.monotonic()
+    plan = shortfall.find(api, request)
+    if plan is None:
+        return DownloadResult(1, request=request)
+    plan.started = searching
+    fills = []
+    for key, _label, _count in plan.options():
+        if len(plan.choose(fills, quiet=True)) >= request.wanted:
+            break
+        if confirm(plan.question(key), key):
+            fills.append(key)
+    return download_plan(api, plan, fills)
+
+
+def ffmpeg_ready(request):
     if request.output in ("short", "both") and not find_ffmpeg():
         say("")
         say("Making Shorts needs ffmpeg, and it is not installed.")
         say("  Windows:  winget install Gyan.FFmpeg   (then open a new window)")
         say("  or:       pip install imageio-ffmpeg")
-        return DownloadResult(1, request=request)
-    manifest = Manifest(MANIFEST_FILE)
-    known_ids = manifest.known_ids(game_name)
-    skip_ids = known_ids if request.history_mode == "new" else frozenset()
+        return False
+    return True
 
-    # Twitch wants RFC3339 UTC timestamps, e.g. 2026-09-20T12:00:00Z
-    ended = datetime.now(timezone.utc).replace(microsecond=0)
-    started = ended - timedelta(hours=request.window_hours)
-    stamp = "%Y-%m-%dT%H:%M:%SZ"
-    started_at, ended_at = started.strftime(stamp), ended.strftime(stamp)
 
-    say("")
-    say("Game      : %s" % game_name)
-    say("Clips     : up to %d" % wanted)
-    say("Window    : %s  (%s -> %s UTC)" % (request.window_label, started_at, ended_at))
-    say("Ranking   : %s" % request.ranking_label)
-    say("Length    : %s" % ("%d to %d seconds" % (request.min_seconds, request.max_seconds)
-                            if request.min_seconds or request.max_seconds else "any length"))
-    say("Language  : channels set to '%s' only" % TARGET_LANGUAGE)
-    say("Filter    : %s" % ("gameplay only - talking clips are skipped"
-                            if request.gameplay_only else "off - every clip in the window"))
-    say("Quality   : %s - never more than the streamer broadcast at"
-        % quality_text(request.max_height))
-    say("Folder    : %s" % request.folder)
-    output = {key: label for label, key in OUTPUT_FORMATS}[request.output]
-    if request.output != "video":
-        style = {key: label for label, key in SHORT_STYLES}[request.short_style]
-        output += "  (%s)" % style.split(" - ")[0].lower()
-    say("Format    : %s" % output)
-    if known_ids:
-        say("History   : %s" % (
-            "skipping %d clip(s) from earlier runs" % len(known_ids)
-            if request.history_mode == "new"
-            else "including earlier runs - deleted files get fetched again"))
-
-    # Language cache survives across runs, so repeat streamers cost no API call.
-    language_cache = load_json(LANG_FILE, {})
-    if not isinstance(language_cache, dict):
-        language_cache = {}
-    if language_cache:
-        say("Cache     : %d known channel languages loaded" % len(language_cache))
-
-    # Trending re-ranks what the search found, and the search returns clips in
-    # view order, so the top slice alone would be the same clips in a different
-    # sequence. Collecting several times the target first is what lets a clip
-    # Twitch buried at number 300 come out on top.
-    target = wanted
-    if request.ranking == "trending":
-        target = max(wanted * VELOCITY_OVERSCAN, VELOCITY_MIN_SCAN)
-    buckets = collect_clips(api, request.game, target, started_at, ended_at, language_cache,
-                            request.gameplay_only, skip_ids,
-                            min_seconds=request.min_seconds, max_seconds=request.max_seconds,
-                            allow=permissions.allow_filter(request.streamer_mode))
-
-    report_filtered(buckets)
-
-    window = request.window_label.lower()
-    if not buckets.total_kept():
-        say("")
-        if buckets.already_had:
-            say("Nothing new for '%s' in the %s window." % (game_name, window))
-            say("All %d clip(s) Twitch has for that window are ones you already"
-                % buckets.scanned)
-            say("downloaded. Try a longer window, or run this again tomorrow.")
-        elif buckets.dropped:
-            say("Every clip for '%s' in the %s window looked like talking, not playing."
-                % (game_name, window))
-            say("Try a longer window, or turn the gameplay filter off to keep them.")
-        else:
-            say("No clips at all for '%s' in the %s window." % (game_name, window))
-            say("Try a longer window, or a more popular category.")
-        return DownloadResult(1, request=request)
-
-    # Put every bucket in the chosen order before any of them is sliced. The
-    # search returns clips by view count, so on "most views" this changes
-    # nothing, but on "trending" it is what decides which clips make the cut
-    # rather than merely what order they are downloaded in.
-    rank_key = ranker(request.ranking)
-    for bucket in (buckets.gameplay, buckets.maybe, buckets.others):
-        bucket.sort(key=rank_key, reverse=True)
-
-    # Clear gameplay first; clips the filter could not read are used only to
-    # make up the numbers, and non-English ones only if we are still short.
-    chosen = list(buckets.gameplay[:wanted])
-    if len(chosen) < wanted and buckets.maybe:
-        filler = buckets.maybe[:wanted - len(chosen)]
-        chosen.extend(filler)
-        say("")
-        say("Found %d clear gameplay clip(s); added %d the filter could not read"
-            % (len(buckets.gameplay), len(filler)))
-        say("to reach the %d you asked for." % wanted)
-
-    if len(chosen) < wanted:
-        say("")
-        say("Found %d usable clip(s); you asked for %d." % (len(chosen), wanted))
-
-        # Clips of the wrong length are offered first: they are still English,
-        # still gameplay, and only set aside over a rule the user just chose,
-        # which makes them a smaller compromise than a channel in another
-        # language. Both offers are skipped when there is nothing to offer.
-        offer_out_of_range(chosen, buckets, wanted - len(chosen), request, rank_key, confirm)
-
-        missing = wanted - len(chosen)
-        if missing > 0 and buckets.others:
-            say("There are %d clip(s) from non-English channels available." % len(buckets.others))
-            if confirm("Top up the remaining %d with non-English clips?" % missing,
-                       "non_english"):
-                chosen.extend(buckets.others[:missing])
-                say("Added %d non-English clip(s)." % min(missing, len(buckets.others)))
-        elif missing > 0 and not buckets.out_of_range:
-            say("There are no other clips in this window to top up with.")
-
+def download_plan(api, plan, fills=()):
+    """Download what a search found plus the chosen fills (see shortfall.py)."""
+    request, manifest, buckets = plan.request, plan.manifest, plan.buckets
+    wanted, game_name, rank_key = request.wanted, request.game_name, plan.rank_key
+    chosen = plan.choose(fills)
     if not chosen:
         say("")
         say("Nothing to download. Try a longer time window or a different game.")
@@ -291,6 +186,8 @@ def run_session(api, request, confirm):
             % (start_index, start_index + len(chosen) - 1))
     say("Saving to: %s" % folder)
     started_monotonic = time.monotonic()
+    if plan.started:
+        timing.record("search", started_monotonic - plan.started)
     try:
         run_downloads(jobs, manifest, request.max_height)
         convert_all(jobs, manifest, request.output, request.short_style,

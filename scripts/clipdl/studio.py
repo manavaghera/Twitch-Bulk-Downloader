@@ -15,7 +15,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import branding, captions, facecams, media, titles
+from . import branding, captions, facecams, media, timing, titles
 from .config import DATA_DIR, MANIFEST_FILE, STOP
 from .folders import saved_folder
 from .shorts import SHORTS_FOLDER, make_short
@@ -41,10 +41,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # -- the clips we have -----------------------------------------------------------------
+_read = {}                      # the download history, until the file changes
+
+
+def _history():
+    try:
+        stamp = (str(MANIFEST_FILE), MANIFEST_FILE.stat().st_mtime)
+    except OSError:
+        return {}
+    if _read.get("stamp") != stamp:
+        _read.update(stamp=stamp, data=load_json(MANIFEST_FILE, {}))
+    return _read["data"]
+
+
 def library(days=None):
     """Downloaded clips, newest first: [{id, title, streamer, login, game, views,
     created_at, url, file, short, has_file, has_short}]."""
-    data = load_json(MANIFEST_FILE, {})
+    data = _history()
     clips = (data or {}).get("clips") or {}
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     rows = []
@@ -115,6 +128,7 @@ def trim_short(entry, start, end, style="blur", with_captions=False, use_brand=F
     source = source_of(entry)
     if source is None:
         return None, "the clip file is gone and could not be fetched again"
+    started = time.time()
     work = Path(tempfile.mkdtemp(prefix="clipdl-studio-"))
     try:
         piece = work / "piece.mp4"
@@ -135,6 +149,7 @@ def trim_short(entry, start, end, style="blur", with_captions=False, use_brand=F
         problem = make_short(piece, target, look, box, ass, brand)
         if problem:
             return None, problem
+        timing.record("trim", time.time() - started)
         if preview:
             return target, None
         suggestion = titles.suggest(entry["title"], entry["streamer"], entry["game"],
@@ -178,6 +193,7 @@ def compilation(entries, title, countdown=True, use_brand=False, folder=None):
     folder = Path(folder or Path(saved_folder()[0]) / "Compilations")
     folder.mkdir(parents=True, exist_ok=True)
     name = sanitize("%s %s" % (date.today().isoformat(), title), 120)
+    started = time.time()
     try:
         parts, chapters, skipped, clock = [], [], [], 0.0
         brand = branding.settings() if use_brand else None
@@ -224,6 +240,7 @@ def compilation(entries, title, countdown=True, use_brand=False, folder=None):
                 raise ValueError(problem)
         notes = folder / (name + ".txt")
         notes.write_text(description(title, chapters, entries), encoding="utf-8")
+        timing.record("compilation", time.time() - started, len(order))
         say("Compilation ready: %s (%s long)" % (video, _stamp(media.probe(video)["duration"])))
         return {"video": video, "notes": notes, "chapters": chapters, "skipped": skipped}
     finally:

@@ -39,3 +39,6 @@ desktop.ini
 .idea/
 *.log
 *.tmp
+
+# A third-party downloader kept for reference (GPL-3.0); the app has its own.
+YTDOWN/

@@ -2,11 +2,11 @@
 
 import streamlit as st
 
-from . import jobs, stats_db, ui_theme, ui_wishlist
+from . import jobs, stats_db, timing, ui_theme, ui_wishlist
 from .regions import best_rpm_countries, language_name
 from .trends import MIN_WIKI_VIEWS
 from .trends_cli import research
-from .ui_common import box_arts, finished_log, progress_panel, start_job
+from .ui_common import box_arts, finished_log, progress_panel, start_job, usual_time
 from .ui_downloader import trend_label
 from .web import CHART_COUNTRIES, normalize_name
 
@@ -268,10 +268,14 @@ def render(api):
         ui_theme.empty_state("🔌", "Connect to Twitch first",
                              "Paste your Twitch app credentials in the sidebar to start.")
         return
+    estimate = timing.estimate("trends") + (timing.estimate("wishlist") if with_wishlist
+                                            else 0)
+    if not (job and job.running):
+        usual_time(estimate)
     if go:
         st.session_state["trend_rows"] = top
         start_job("trends", "Trend research",
-                  lambda: research(api, candidates, with_wishlist=with_wishlist))
+                  lambda: research(api, candidates, with_wishlist=with_wishlist), estimate)
 
     if job is None:
         ui_theme.empty_state("📊", "No research yet",

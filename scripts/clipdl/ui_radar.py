@@ -6,10 +6,10 @@ from pathlib import Path
 
 import streamlit as st
 
-from . import captions, jobs, radar, reposts, ui_login, ui_theme, yt_quota
+from . import captions, jobs, radar, reposts, timing, ui_login, ui_theme, yt_quota
 from .folders import saved_folder
 from .session import download_clips
-from .ui_common import busy_elsewhere, progress_panel, start_job
+from .ui_common import busy_elsewhere, progress_panel, start_job, tab_open, usual_time
 from .trends_cli import youtube_key
 from .ui_downloader import STYLE_LABELS
 from .util import sanitize
@@ -26,7 +26,7 @@ def _fmt(value):
     return "%d" % value
 
 
-@st.cache_data(ttl=600, show_spinner="Scanning the top games' clips - a few seconds…")
+@st.cache_data(ttl=600, show_spinner=False)
 def cached_scan(client_id, client_secret, games, hours, nonce):
     return radar.scan(client_id, client_secret, games, hours)
 
@@ -61,8 +61,12 @@ def render(api):
                                        "and skips them when downloading, like a normal run.")
         if cols[4].button("Scan again", icon=":material/refresh:", width="stretch"):
             st.session_state["rad_nonce"] = time.time()
-    result = cached_scan(api.client_id, api.client_secret, games, hours,
-                         st.session_state.get("rad_nonce", 0))
+    if not tab_open():
+        return                              # the scan waits until this tab is opened
+    with st.spinner("Scanning the top games' clips - %s…" % timing.text(
+            timing.estimate("radar_scan"))):
+        result = cached_scan(api.client_id, api.client_secret, games, hours,
+                             st.session_state.get("rad_nonce", 0))
     clips = radar.filtered(result, language, min_views, hide_have, hide_blocked=True,
                            hide_spam=hide_spam, hide_talk=gameplay)
     age = (time.time() - result["scanned_at"]) / 60
@@ -138,6 +142,8 @@ def download_box(api, shown, gameplay=True):
                        disabled=not picked or bool(other) or bool(job and job.running))
         if other:
             st.caption("⏳ %s is downloading - this can start when it is done." % other)
+        elif picked:
+            usual_time(timing.download_run(len(picked), output, with_captions, searches=0))
     if job and job.running:
         progress_panel("download", where="_radar")
     elif job and job.result and job.label.startswith("Clip radar"):
@@ -148,7 +154,8 @@ def download_box(api, shown, gameplay=True):
         folder = _folder()
         start_job("download", "Clip radar, %d clips" % len(clips),
                   lambda: download_clips(clips, folder, output, style, with_captions,
-                                         label="Clip radar", api=api, gameplay_only=gameplay))
+                                         label="Clip radar", api=api, gameplay_only=gameplay),
+                  timing.download_run(len(clips), output, with_captions, searches=0))
 
 
 def _repost_chip(clip):

@@ -14,6 +14,18 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   same moment skipped; clips you already have are never fetched twice.
 - 16:9 videos, 1080×1920 vertical Shorts (blurred background or centre crop), or both.
 - Up to 1080p, or the maximum each clip has (up to 4K). Optional one-file `.zip`.
+  Optional **minimum quality** (720p / 1080p / 1440p / 4K only): each clip's quality is
+  looked up before downloading. Most Twitch clips are 1080p; 1440p is rare, 4K rarer.
+- **Search first, then ask**: when fewer clips pass your rules than you asked for
+  (say 459 of 1,000), nothing downloads until you choose how to fill the gap - older
+  clips from the days before your window, lower-quality clips, other lengths,
+  non-English channels or talking clips - each shown with how many it adds - or take
+  only what was found.
+- **A timer on everything**: every start button says how long it usually takes on
+  your PC, and running jobs count down ("~1:20 left"). The estimates learn from your
+  own runs (`data/timings.json`).
+- Shorts are encoded on the graphics card when there is one (NVIDIA NVENC or Intel
+  Quick Sync), falling back to the processor on its own.
 
 **Trend research**
 - Most popular and getting-popular games this week, US and Europe, from Steam charts
@@ -59,6 +71,13 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   best on your channel, or the clip radar), download their best new clips, make the Shorts
   and title files, and leave a report. Runs from the page or on a daily schedule in
   Windows Task Scheduler.
+- **YouTube** - paste links to videos, Shorts or live streams and download up to **4K**
+  (or MP3); a live stream is **recorded** from now until it ends or you stop it (what was
+  recorded is kept), or from the very start; a scheduled stream is waited for.
+- **Auto clips** - give a YouTube video or finished live stream and a number: the app finds
+  the best moments (YouTube's "Most replayed" graph, live-chat bursts, the loudest
+  reactions - each compared with its surroundings), downloads only those parts, and makes
+  each a Short with captions and a .txt of title ideas and credit.
 - **Studio** - **trim & preview** a clip into a Short (keep only the best seconds);
   a **weekly compilation** of the top clips as one 16:9 video with an on-screen credit on
   each clip and YouTube chapters; **branding & hooks** - your logo, a hook line
@@ -84,7 +103,7 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   [dev.twitch.tv/console](https://dev.twitch.tv/console)
   (Register Your Application → OAuth Redirect URL `http://localhost` → Category
   *Application Integration* → Confidential)
-- ffmpeg, only for Shorts (`winget install Gyan.FFmpeg`; otherwise the bundled
+- ffmpeg, only for Shorts and the Studio (`winget install Gyan.FFmpeg`; otherwise the bundled
   `imageio-ffmpeg` is used)
 
 ## Quick start
@@ -153,8 +172,16 @@ not an official API and may change - Game research shows a warning when it stops
 
 ## Captions and the Autopilot
 
-Captions use faster-whisper, installed with the requirements; the speech model (~150 MB)
-downloads on first use and runs on the CPU (about a second per clip). The Autopilot saves
+Captions use faster-whisper, installed with the requirements. Studio > Captions sets how
+they look - **Pop** (the word being said lights up), Karaoke, Classic or Boxed; lower
+third, middle or top; size, colour, ALL CAPS - and how accurate: Fast (base), Better
+(small) or Best (large-v3-turbo); Auto picks the best the PC runs well. Models download on
+first use. With an NVIDIA card, install its libraries once and captions take well under a
+second per clip even with the best model:
+
+```bash
+.venv\Scripts\pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
+``` The Autopilot saves
 into `<download folder>\Autopilot\<date>`; scheduled runs log to `data\autopilot.log`.
 Run it by hand with:
 
@@ -162,7 +189,18 @@ Run it by hand with:
 .venv\Scripts\python.exe scripts\autopilot.py
 ```
 
-## Optional: YouTube
+## YouTube downloads
+
+Needs Node.js (nodejs.org) or Deno installed - YouTube's links are unlocked with a small
+JavaScript puzzle - and uses the `yt-dlp[default]` extras from the requirements. When
+YouTube says "confirm you're not a bot" (it does after many requests from one PC), or a
+video is members-only or age-restricted, open "YouTube says confirm you're not a bot" on
+the YouTube tab and use cookies from a browser where you are signed in (Firefox works while
+open; close Chrome/Edge first), or a `cookies.txt`. Cookies are your login session: they
+stay in `data/`, and a second Google account is the safer choice. Download only videos you
+own or have permission to use.
+
+## Optional: YouTube API key
 
 A free YouTube Data API v3 key adds YouTube's trending gaming videos to Trend research and
 live YouTube gaming streams to Game research.

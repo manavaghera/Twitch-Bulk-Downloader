@@ -27,7 +27,6 @@ losing every other signal because one of them failed.
 """
 
 import re
-from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -35,9 +34,13 @@ import requests
 from . import yt_quota
 from .config import DATA_DIR, HTTP_TIMEOUT, STOP
 from .util import chunked, load_json, save_json
+from .wikiviews import wiki_views
 
 YOUTUBE_API = "googleapis.com/youtube/v3/"
-USER_AGENT = "TwitchTrendResearch/1.0 (personal research script; python-requests)"
+# Wikimedia asks every script to say who it is and where to reach its maker,
+# and slows down ones that look like a bare HTTP library.
+USER_AGENT = ("ClipStudio/1.1 (+https://github.com/manavaghera/Twitch-Bulk-Downloader; "
+              "personal game-trend research)")
 STEAM_APPS_FILE = DATA_DIR / "steam_apps.json"   # appid -> {name, type}
 
 # The Western store charts asked for. Country codes as the Steam store uses them.
@@ -73,7 +76,7 @@ class WebClient:
     def _retry_after(response, attempt):
         """Seconds a 429 asks us to wait, within reason."""
         try:
-            return max(1.0, min(30.0, float(response.headers.get("Retry-After"))))
+            return max(1.0, min(60.0, float(response.headers.get("Retry-After"))))
         except (TypeError, ValueError):
             return min(attempt * 3.0, 15.0)
 
@@ -315,7 +318,8 @@ def wiki_descriptions(web, titles):
             asked[step.get("to")] = asked.get(step.get("from"), step.get("from"))
         for page in query.get("pages") or []:
             if "missing" not in page:
-                found[asked.get(page.get("title"), page.get("title"))] =                     page.get("description") or ""
+                title = asked.get(page.get("title"), page.get("title"))
+                found[title] = page.get("description") or ""
     return found
 
 
@@ -338,61 +342,6 @@ def wiki_other_languages(web, english_titles, languages=("de", "fr")):
 def wiki_weekly_views(web, articles):
     """{(lang, title): (this week, the week before)} in daily page views."""
     return {article: windows[7] for article, windows in wiki_views(web, articles).items()}
-
-
-def wiki_views(web, articles, windows=(7,)):
-    """{(lang, title): {days: (last `days` days, the `days` before)}} in page views.
-
-    Uses the MediaWiki API's pageviews property, which returns the daily views
-    of 50 articles per request - a few requests per language instead of one per
-    article, which is the difference between seconds and minutes. The window
-    ends yesterday, the last full day Wikimedia has published. Wikipedia keeps
-    60 days here, so the longest window is 30 days against the 30 before.
-    """
-    longest = min(max(windows), 30)
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
-    days = [(yesterday - timedelta(days=offset)).isoformat() for offset in range(2 * longest)]
-    spans = {n: (set(days[:n]), set(days[n:2 * n])) for n in windows if n <= longest}
-
-    by_language = {}
-    for language, title in articles:
-        by_language.setdefault(language, []).append(title)
-
-    results = {}
-    for language, titles in by_language.items():
-        for batch in chunked(sorted(set(titles)), 50):
-            # redirects=1: "Baldur's Gate III" is only a redirect to the real
-            # article, and the redirect page itself gets a handful of views.
-            params = {"action": "query", "titles": "|".join(batch), "prop": "pageviews",
-                      "pvipdays": min(60, 2 * longest + 1), "redirects": 1, "format": "json",
-                      "formatversion": 2}
-            asked = {title: title for title in batch}
-            while True:
-                payload = web.get_json("https://%s.wikipedia.org/w/api.php" % language, params)
-                query = (payload or {}).get("query") or {}
-                for step in (query.get("normalized") or []) + (query.get("redirects") or []):
-                    asked[step.get("to")] = asked.get(step.get("from"), step.get("from"))
-                for page in query.get("pages") or []:
-                    views = page.get("pageviews") or {}
-                    if not views:
-                        continue
-                    title = asked.get(page.get("title"), page.get("title"))
-                    results[(language, title)] = {
-                        n: _window_sums(views, recent_days, older_days)
-                        for n, (recent_days, older_days) in spans.items()}
-                more = (payload or {}).get("continue")
-                if not more:
-                    break
-                params.update(more)
-    return results
-
-
-def _window_sums(views, recent_days, older_days):
-    recent = sum(v or 0 for d, v in views.items() if d in recent_days)
-    # An article younger than the older window cannot be compared.
-    had_older = any(v is not None for d, v in views.items() if d in older_days)
-    older = sum(v or 0 for d, v in views.items() if d in older_days)
-    return recent, older if had_older else 0
 
 
 # ---------------------------------------------------------------------------

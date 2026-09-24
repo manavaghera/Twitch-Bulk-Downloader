@@ -6,11 +6,12 @@ from pathlib import Path
 
 import streamlit as st
 
-from . import branding, captions, jobs, media, studio, ui_login, ui_theme
-from .ui_common import finished_log, is_hosted, progress_panel, start_job
+from . import (branding, captions, jobs, media, studio, timing, ui_captions, ui_login,
+               ui_theme)
+from .ui_common import finished_log, is_hosted, progress_panel, start_job, usual_time
 from .ui_downloader import STYLE_LABELS
 
-PARTS = ["✂️ Trim & preview", "🎞️ Weekly compilation", "🎨 Branding & hooks"]
+PARTS = ["✂️ Trim & preview", "🎞️ Weekly compilation", "🎨 Branding & hooks", "💬 Captions"]
 MAX_DOWNLOAD_MB = 200
 
 
@@ -21,8 +22,10 @@ def render(api):
         trim_box()
     elif part == PARTS[1]:
         compilation_box()
-    else:
+    elif part == PARTS[2]:
         branding_box()
+    else:
+        ui_captions.render()
 
 
 def _label(row):
@@ -95,7 +98,8 @@ def trim_box():
         if ui_login.may_download("tr_sign_in") and st.button(
                 "Make this Short", type="primary", icon=":material/content_cut:",
                 width="stretch", disabled=end - start < 1):
-            with st.spinner("Making the Short - a few seconds%s…" % (
+            with st.spinner("Making the Short - %s%s…" % (
+                    timing.text(timing.estimate("trim")),
                     ", plus the captions" if with_captions else "")):
                 path, problem = studio.trim_short(entry, start, end, style, with_captions, brand)
             if problem:
@@ -151,7 +155,10 @@ def compilation_box():
                 "Make the compilation (%d clips)" % len(chosen), type="primary",
                 icon=":material/movie:", width="stretch", disabled=busy or len(chosen) < 2):
             start_job("studio", "Compilation: %s" % title,
-                      lambda: studio.compilation(chosen, title, countdown, brand))
+                      lambda: studio.compilation(chosen, title, countdown, brand),
+                      timing.estimate("compilation", len(chosen)))
+        if not busy:
+            usual_time(timing.estimate("compilation", len(chosen)))
         st.caption("YouTube shows chapters when there are at least 3, each 10 seconds or "
                    "longer - clips of 10 s and up do it.")
     if job and job.running:

@@ -29,7 +29,7 @@ st.set_page_config(page_title="Clip Studio", page_icon="🎮", layout="wide",
 
 from clipdl import (jobs, ui_automation, ui_channel, ui_common, ui_downloader,  # noqa: E402
                     ui_login, ui_radar, ui_releases, ui_research, ui_streamers, ui_studio,
-                    ui_theme, ui_trends)
+                    ui_theme, ui_trends, ui_youtube)
 from clipdl import releases  # noqa: E402
 from clipdl.trends_cli import youtube_key  # noqa: E402
 
@@ -42,8 +42,8 @@ api = ui_common.sidebar_connection(account_box=ui_login.sidebar_box,
 
 chips = [("Twitch connected", "ok") if api else ("Twitch not connected", "bad"),
          ("YouTube signals on", "ok") if youtube_key() else ("YouTube signals off", "")]
-busy = [job.label for job in (jobs.running(kind) for kind in ("download", "trends", "studio",
-                                                                "upload")) if job]
+busy = [job.label for job in (jobs.running(kind) for kind in (
+    "download", "trends", "studio", "upload", "youtube")) if job]
 chips.append(("Running: %s" % " + ".join(busy), "live") if busy else ("Ready", "ok"))
 launches = releases.load()
 soon = releases.this_week(launches["games"]) if launches else []
@@ -55,9 +55,13 @@ ui_theme.hero("🎮 Clip <span>Studio</span>",
               "best Twitch clips as ready-to-edit videos or vertical Shorts.", chips)
 
 tabs = st.tabs(["📈  Trend research", "🔬  Game research", "📡  Clip radar", "👀  Streamers",
-                "📅  Releases", "⬇️  Clip downloader", "🎬  Studio", "📺  My channel",
-                "🤖  Automation"], key="main_tab", on_change="rerun")
+                "📅  Releases", "⬇️  Clip downloader", "▶️  YouTube", "🎬  Studio",
+                "📺  My channel", "🤖  Automation"], key="main_tab", on_change="rerun")
 for tab, page in zip(tabs, (ui_trends, ui_research, ui_radar, ui_streamers, ui_releases,
-                            ui_downloader, ui_studio, ui_channel, ui_automation)):
+                            ui_downloader, ui_youtube, ui_studio, ui_channel,
+                            ui_automation)):
+    # Every tab is drawn so its settings are kept while you look elsewhere, but
+    # the slow parts (clip scans, live checks) only run in the open one.
+    st.session_state["_tab_open"] = tab.open is not False
     with tab:
         page.render(api)

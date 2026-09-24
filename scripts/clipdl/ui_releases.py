@@ -5,7 +5,7 @@ from datetime import date
 
 import streamlit as st
 
-from . import jobs, releases, ui_theme, wishlist
+from . import jobs, releases, timing, ui_theme, wishlist
 from .ui_common import progress_panel, start_job
 
 VERDICT_CHIPS = {"boom": ("🔥 Boom likely", "cs-warn"), "heating": ("🚀 Heating up", "cs-good"),
@@ -48,7 +48,8 @@ def render(api):
                             % time.strftime("%d %b %H:%M", time.localtime(data["scanned_at"])))
         if cols[1].button("Scan now", icon=":material/refresh:", width="stretch",
                           disabled=busy or api is None):
-            start_job("trends", "Steam wishlist scan", lambda: wishlist.scan(api))
+            start_job("trends", "Steam wishlist scan", lambda: wishlist.scan(api),
+                      timing.estimate("wishlist"))
     if job and job.running and job.label == "Steam wishlist scan":
         progress_panel("trends", where="_rel")
         return

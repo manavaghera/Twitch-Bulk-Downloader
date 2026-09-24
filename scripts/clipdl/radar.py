@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import permissions, stats_db
+from . import permissions, stats_db, timing
 from .api import TwitchAPI, TwitchError
 from .config import MANIFEST_FILE, VELOCITY_FLOOR_HOURS
 from .filter import classify_clip
@@ -60,13 +60,14 @@ def _clips_of(api, game, started_at, ended_at):
     return items
 
 
-def scan(client_id, client_secret, games=50, hours=24, workers=6):
+def scan(client_id, client_secret, games=50, hours=24, workers=12):
     """Every top clip of the top `games` games in the last `hours`, fastest first.
 
     Each clip dict gets: game_name, game_key, age_hours, per_hour, permission,
     have (already downloaded before)."""
     # Its own client and Cancel switch: a cancelled download must not stop a scan.
     api = TwitchAPI(client_id, client_secret, stop=threading.Event(), log=lambda *a, **k: None)
+    started = time.time()
     picked = top_games(api, games)
     now = datetime.now(timezone.utc).replace(microsecond=0)
     stamp = "%Y-%m-%dT%H:%M:%SZ"
@@ -95,6 +96,7 @@ def scan(client_id, client_secret, games=50, hours=24, workers=6):
         clip["talk"] = classify_clip(clip, "")[0] == "talk"
         clips.append(clip)
     clips.sort(key=lambda c: c["per_hour"], reverse=True)
+    timing.record("radar_scan", time.time() - started)
     return {"clips": clips, "games": len(picked), "scanned_at": time.time(), "hours": hours}
 
 

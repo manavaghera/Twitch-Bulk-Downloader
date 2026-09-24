@@ -61,8 +61,9 @@ def cached_insights(platforms, period, games_only):
     return rm.insights(list(platforms), period, games_only)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_resource(ttl=300, show_spinner=False)
 def icon_map():
+    """Shared, not copied: it is looked up for every row of every table."""
     return rm.icons()
 
 

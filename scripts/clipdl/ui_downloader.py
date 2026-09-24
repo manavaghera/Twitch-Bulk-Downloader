@@ -4,17 +4,18 @@ import os
 
 import streamlit as st
 
-from . import captions, jobs, permissions, titles, ui_login, ui_theme
+from . import (captions, jobs, permissions, timing, titles, ui_login, ui_shortfall,
+               ui_theme)
 from .api import TwitchError
 from .config import (DOWNLOAD_ROOT, MAX_CLIP_SECONDS, MAX_CLIPS, MIN_CLIP_SECONDS,
-                     OUTPUT_FORMATS, QUALITIES, RANKINGS, SHORT_STYLES, STOP,
+                     MIN_QUALITIES, OUTPUT_FORMATS, QUALITIES, RANKINGS, SHORT_STYLES,
                      TIME_WINDOWS)
 from .folders import (check_folder, game_folder, parse_folder, pick_folder, save_prefs,
                       saved_folder)
-from .session import DownloadRequest, build_zip, known_clip_count, run_session
+from .session import DownloadRequest, DownloadResult, known_clip_count
 from .shorts import SHORTS_FOLDER, find_ffmpeg
 from .ui_common import (box_arts, busy_elsewhere, finished_log, is_hosted, progress_panel,
-                        start_job, twitch_client)
+                        start_job, twitch_client, usual_time)
 from .util import human_size
 
 # The browser download hands the whole file over in one piece, so past this
@@ -169,8 +170,9 @@ def form_filters(game):
         with cols[1]:
             gameplay_only = st.toggle("Gameplay clips only", value=True,
                                       help="Skips caster desks, watch parties and chat clips.")
-            top_up_lengths = st.toggle("Too few? Top up with other lengths")
-            top_up_foreign = st.toggle("Still too few? Top up with non-English clips")
+            st.caption("Too few clips pass these rules? You are asked how to fill the gap "
+                       "- older clips, other lengths, other languages - before anything "
+                       "downloads.")
         marked = permissions.entries()
         streamer_mode = st.segmented_control(
             "Streamers (your permission list)", list(STREAMER_LABELS),
@@ -181,8 +183,7 @@ def form_filters(game):
         ui_theme.note("Your list: <b>%d</b> allowed, <b>%d</b> marked don't use." % (
             sum(1 for e in marked if e.get("status") == "allowed"),
             sum(1 for e in marked if e.get("status") == "blocked")))
-    return (min_s, max_s, gameplay_only, history_mode, top_up_lengths, top_up_foreign,
-            streamer_mode)
+    return min_s, max_s, gameplay_only, history_mode, streamer_mode
 
 
 def form_output():
@@ -201,6 +202,15 @@ def form_output():
                 help="Every clip comes down at the most it has, up to the cap. Twitch keeps a "
                      "clip at the resolution the stream was broadcast in, so clips above 1080p "
                      "only exist for streamers broadcasting in 1440p or 4K.")
+            min_height = st.selectbox(
+                "Only keep clips of at least", [h for _, h in MIN_QUALITIES],
+                format_func=dict((h, label) for label, h in MIN_QUALITIES).get, key="dl_min_q",
+                help="A filter: each clip's quality is looked up before downloading (about a "
+                     "second for every five clips). Most Twitch clips are 1080p or 720p - if "
+                     "too few pass, you are asked how to fill the rest.")
+            if min_height > (max_height or 0) > 0:
+                max_height = 0
+                st.caption("Downloading at maximum quality, so clips above 1080p keep it.")
         short_style, with_captions = "blur", False
         if output != "video":
             short_style = st.segmented_control(
@@ -218,7 +228,7 @@ def form_output():
             if not find_ffmpeg():
                 st.error("Shorts need ffmpeg, which is not installed. Run "
                          "`winget install Gyan.FFmpeg`, then restart this page.")
-    return output, short_style, max_height, with_captions
+    return output, short_style, max_height, with_captions, min_height
 
 
 def form_folder(game, output):
@@ -254,9 +264,8 @@ def render_form(api):
     left, right = st.container(key="dl_layout").columns([1.75, 1], gap="large")
     with left:
         game, wanted, hours, ranking = form_game(api)
-        (min_s, max_s, gameplay_only, history_mode, top_up_lengths, top_up_foreign,
-         streamer_mode) = form_filters(game)
-        output, short_style, max_height, with_captions = form_output()
+        min_s, max_s, gameplay_only, history_mode, streamer_mode = form_filters(game)
+        output, short_style, max_height, with_captions, min_height = form_output()
         root, per_game, problem, as_zip, target, hosted = form_folder(game, output)
 
     window_label = next(label for label, h in TIME_WINDOWS if h == hours)
@@ -280,7 +289,9 @@ def render_form(api):
                  ("From", "the last " + WINDOW_LABELS[hours]),
                  ("Length", length + (", gameplay only" if gameplay_only else "")),
                  ("Output", "%s · %s" % (FORMAT_LABELS[output].split(" ", 1)[1],
-                                         QUALITY_LABELS[max_height])),
+                                         QUALITY_LABELS[max_height])
+                  + (" · only %s" % dict((h, label) for label, h in MIN_QUALITIES)[
+                      min_height].lower() if min_height else "")),
                  ("Extras", ", ".join(x for x in (
                      STYLE_LABELS[short_style].lower() if output != "video" else "",
                      "captions" if with_captions else "", "title ideas (.txt)") if x)),
@@ -307,6 +318,7 @@ def render_form(api):
             else:
                 st.caption("English channels only · talking clips and repeats of the same "
                            "moment skipped · clips you already have are never fetched twice.")
+                usual_time(timing.download_run(wanted, output, with_captions))
         if job and job.running:
             progress_panel("download", can_cancel=not locked)
 
@@ -323,20 +335,16 @@ def render_form(api):
     request = DownloadRequest(game, wanted, (window_label, hours), (ranking_label, ranking),
                               min_s, max_s, gameplay_only, history_mode, output, short_style,
                               max_height, root, per_game, captions=with_captions,
-                              streamer_mode=streamer_mode)
-    answers = {"lengths": top_up_lengths, "non_english": top_up_foreign}
-
-    def work():
-        result = run_session(api, request, lambda _q, kind: answers[kind])
-        if as_zip and result.code == 0 and not STOP.is_set():
-            build_zip(result)
-        return result
-
-    start_job("download", "%s, %d %s" % (game["name"], wanted, noun), work)
+                              streamer_mode=streamer_mode, min_height=min_height)
+    start_job("download", "%s, %d %s" % (game["name"], wanted, noun),
+              lambda: ui_shortfall.search_then_download(api, request, as_zip),
+              timing.download_run(wanted, output, with_captions))
 
 
 def render_result(result):
-    if result is None or not result.jobs:
+    # Other runs share the download slot (the Autopilot hands back its own
+    # summary): only a download's result has a list of clips to show.
+    if not isinstance(result, DownloadResult) or not result.jobs:
         return
     rows, total_bytes = [], 0
     for job in result.jobs:
@@ -403,6 +411,12 @@ def render(api):
     job = jobs.latest("download")
     if job is None or job.running or ui_login.needs_login():
         return
+    if ui_shortfall.waiting_plan(job):
+        st.space("medium")
+        ui_shortfall.card(api, job)
+        return
+    if ui_shortfall.closed_note(job):
+        return
     st.space("medium")
     with _card("result"):
         if job.error:
@@ -410,7 +424,10 @@ def render(api):
         elif job.cancelled:
             st.warning("Cancelled. Clips that finished are kept; the rest can be fetched "
                        "next run.", icon=":material/pause_circle:")
-        else:
+        elif isinstance(job.result, DownloadResult):
             st.success("Done: %s" % job.label, icon=":material/check_circle:")
+        else:
+            st.success("Done: %s - its details are on the page it was started from."
+                       % job.label, icon=":material/check_circle:")
         render_result(job.result)
         finished_log(job)

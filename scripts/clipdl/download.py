@@ -3,6 +3,7 @@
 import random
 import re
 import threading
+import time
 from concurrent.futures import as_completed
 
 from yt_dlp import YoutubeDL
@@ -10,6 +11,7 @@ from yt_dlp.utils import DownloadError
 
 from .config import (MAX_CONCURRENT_DOWNLOADS, MAX_HEIGHT, MAX_PATH_CHARS,
                      POLITE_DELAY, STOP, ydl_format)
+from . import timing
 from .util import describe_height, human_size, sanitize, say, thread_pool
 
 # ---------------------------------------------------------------------------
@@ -296,6 +298,7 @@ def run_downloads(jobs, manifest, max_height=MAX_HEIGHT):
 
     say("")
     say("Downloading %d clip(s), %d at a time..." % (len(pending), MAX_CONCURRENT_DOWNLOADS))
+    started = time.monotonic()
     with thread_pool(MAX_CONCURRENT_DOWNLOADS) as pool:
         futures = [pool.submit(download_one, job, total, counter, manifest, max_height)
                    for job in pending]
@@ -309,3 +312,5 @@ def run_downloads(jobs, manifest, max_height=MAX_HEIGHT):
             for future in futures:
                 future.cancel()
     manifest.flush()
+    if not STOP.is_set():
+        timing.record("download", time.monotonic() - started, len(pending))

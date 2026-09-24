@@ -323,6 +323,7 @@ class ClipBuckets:
         self.maybe = []     # English channel, the text did not say either way
         self.others = []    # non-English channel, kept only to top up
         self.dropped = []   # (title, reason) for clips the filter threw out
+        self.talk = []      # those clips themselves, English or not, offered only on request
         self.duplicates = []  # (title, reason) for repeats of a clip already kept
         # English clips of the wrong length. Held back rather than binned, so a
         # run that falls short can offer them instead of simply being short.
@@ -424,6 +425,7 @@ def collect_clips(api, game, wanted, started_at, ended_at, language_cache,
 
             if verdict == "talk":
                 buckets.dropped.append((clip.get("title") or "", reason))
+                buckets.talk.append(clip)
                 continue
 
             # Only clips worth keeping go into the duplicate index, so a

@@ -1,8 +1,9 @@
 """The research tool's menus and its two reports."""
 
 import os
+import time
 
-from . import wishlist
+from . import timing, wishlist
 from .api import TwitchAPI, TwitchError
 from .cli import load_credentials
 from .config import CONFIG_FILE, DATA_DIR, STOP
@@ -12,7 +13,7 @@ from .regions import (AMBIGUOUS_LANGUAGES, BORDERLINE_LANGUAGES,
 from .trend_gather import gather
 from .trends import (HISTORY_FILE, MIN_WIKI_VIEWS, previous_snapshot, rank_trends,
                      save_snapshot, snapshot_before)
-from .util import ask_int, ask_yes_no, load_json, say
+from .util import ask_int, ask_yes_no, load_json, save_json, say
 from .web import CHART_COUNTRIES
 
 LINE = "=" * 78
@@ -46,23 +47,47 @@ def research(api, candidates=40, with_wishlist=False):
     `wishlist`: the Steam wishlist scan (see wishlist.scan), None if it failed,
     False if it was not asked for.
     """
+    started = time.time()
     key = youtube_key()
     trends, sources = gather(api, candidates, key)
     popular, rising = rank_trends(trends, youtube_enabled=bool(key)) if trends else ([], [])
     if popular:
         save_snapshot(popular)
+        save_picks(popular, rising)
+        timing.record("trends", time.time() - started)
     found = {"trends": trends, "popular": popular, "rising": rising, "sources": sources,
              "youtube": bool(key), "previous": snapshot_before(hours=20),
              "wishlist": None if with_wishlist else False}
     if with_wishlist and not STOP.is_set():
         # Its own try: a Steam hiccup here must not throw away the scan above.
         try:
+            scan_started = time.time()
             found["wishlist"] = wishlist.scan(api)
+            timing.record("wishlist", time.time() - scan_started)
         except (TwitchError, ValueError, KeyError, TypeError) as error:
             say("  Steam wishlist scan failed (%s)." % str(error)[:60])
         else:
             sources.update(found["wishlist"]["sources"])
     return found
+
+
+PICKS_FILE = DATA_DIR / "last_research.json"
+PICKS_FRESH_HOURS = 6
+
+
+def save_picks(popular, rising):
+    """What the Autopilot needs from a scan - kept, so a run soon after reuses it."""
+    row = lambda t: {"id": t.id, "name": t.name, "verdict": t.verdict}     # noqa: E731
+    save_json(PICKS_FILE, {"at": time.time(), "rising": [row(t) for t in rising if t.id],
+                           "popular": [row(t) for t in popular[:60] if t.id]})
+
+
+def recent_picks(hours=PICKS_FRESH_HOURS):
+    """The last scan's rising and popular games, if it ran within `hours`; else None."""
+    data = load_json(PICKS_FILE, {})
+    if isinstance(data, dict) and time.time() - float(data.get("at", 0)) < hours * 3600:
+        return data
+    return None
 
 
 def _num(value):

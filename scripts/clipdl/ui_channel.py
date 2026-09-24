@@ -8,8 +8,9 @@ from datetime import time as clock
 import pandas as pd
 import streamlit as st
 
-from . import jobs, mychannel, studio, ui_login, ui_theme, uploader, yt_quota, ytauth
-from .ui_common import finished_log, is_hosted, progress_panel, start_job
+from . import (jobs, mychannel, studio, timing, ui_login, ui_theme, uploader, yt_quota,
+               ytauth)
+from .ui_common import finished_log, is_hosted, progress_panel, start_job, usual_time
 
 GUIDE = "https://console.cloud.google.com/apis/credentials"
 AUDIT = "https://support.google.com/youtube/contact/yt_api_form"
@@ -192,7 +193,10 @@ def upload_box():
                                   "meta": {"clip_id": entry["id"], "game": entry["game"],
                                            "streamer": entry["streamer"]}})
                 start_job("upload", "Uploading %d Shorts" % len(items),
-                          lambda: uploader.upload_all(items, privacy, first, every))
+                          lambda: uploader.upload_all(items, privacy, first, every),
+                          timing.estimate("upload", len(items)))
+            if not chosen.empty:
+                usual_time(timing.estimate("upload", len(chosen)))
     if job and job.running:
         progress_panel("upload", where="_yt")
     elif job:

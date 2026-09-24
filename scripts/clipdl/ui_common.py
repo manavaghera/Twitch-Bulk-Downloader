@@ -25,7 +25,7 @@ from html import escape
 import requests
 import streamlit as st
 
-from . import jobs, locks, ui_theme
+from . import jobs, locks, timing, ui_theme
 from .api import TwitchAPI, TwitchError
 from .cli import stored_credentials
 from .config import CONFIG_FILE, DATA_DIR
@@ -111,8 +111,8 @@ def _sidebar_footer():
             "(optionally) YouTube to see which games are big or climbing this week.\n"
             "2. **Clip downloader** grabs the best English gameplay clips of a game - "
             "picks from your research show up first.\n\n"
-            "One run at a time: a download and a trend scan share the same cancel "
-            "switch and logs, so the second waits for the first.")
+            "A download and a trend scan can run at the same time, each with its own "
+            "progress, countdown and Cancel button.")
 
 
 def sidebar_connection(account_box=None, can_edit=True):
@@ -279,10 +279,11 @@ def _save_config(**changes):
     save_json(CONFIG_FILE, config)
 
 
-def start_job(kind, label, work):
-    """Start a background run, or explain why not. Returns True if it started."""
+def start_job(kind, label, work, estimate=None):
+    """Start a background run, or explain why not. Returns True if it started.
+    `estimate`: seconds it usually takes (timing.py), for the countdown."""
     try:
-        jobs.start(kind, label, work)
+        jobs.start(kind, label, work, estimate)
     except jobs.Busy as error:
         st.warning(str(error))
         return False
@@ -300,6 +301,29 @@ def busy_elsewhere(kind):
 
 def _minutes(seconds):
     return "%d:%02d" % divmod(int(seconds), 60)
+
+
+def time_left(job):
+    """"~1:20 left" for the progress panel, or "" before anything can be said."""
+    step, whole = job.eta()
+    if whole is not None:
+        if whole <= 0:
+            return "taking longer than usual"
+        return "~%s left" % timing.clock(whole)
+    if step is not None:
+        return "~%s left in this step" % timing.clock(step) if step > 0 else "finishing"
+    return ""
+
+
+def tab_open():
+    """False while the page draws a tab nobody is looking at (web_app sets it):
+    slow network work (scans, live checks) waits until the tab is opened."""
+    return st.session_state.get("_tab_open", True)
+
+
+def usual_time(seconds):
+    """The line under a start button: how long this usually takes."""
+    st.caption("⏱ Usually takes %s on this PC." % timing.text(seconds))
 
 
 @st.fragment(run_every=1.0)
@@ -320,13 +344,15 @@ def progress_panel(kind, can_cancel=True, where=""):
     # `where` keeps the widget keys apart when several tabs show the same job.
     with st.container(border=True, key="card_progress_%s%s" % (kind, where)):
         top = st.columns([5, 1], vertical_alignment="center")
+        left = "" if stopping else time_left(job)
         with top[0]:
             ui_theme.html(
                 '<div class="cs-step"><span class="cs-dot live" style="flex:none"></span>'
-                '<div><div class="t">%s</div><div class="h">%s &nbsp;·&nbsp; %s elapsed</div>'
+                '<div><div class="t">%s</div><div class="h">%s &nbsp;·&nbsp; %s elapsed%s</div>'
                 '</div></div>' % (escape(job.label),
                                   "Stopping after the clips in flight" if stopping
-                                  else "Running", _minutes(job.elapsed)))
+                                  else "Running", _minutes(job.elapsed),
+                                  " &nbsp;·&nbsp; <b>⏱ %s</b>" % escape(left) if left else ""))
         if top[1].button("Stopping…" if stopping else "Cancel", key="cancel_%s%s" % (kind, where),
                          icon=":material/stop_circle:", width="stretch",
                          disabled=stopping or not can_cancel):

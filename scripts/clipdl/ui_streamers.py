@@ -6,11 +6,11 @@ from pathlib import Path
 import requests
 import streamlit as st
 
-from . import captions, facecams, jobs, permissions, ui_login, ui_theme, watchlist
+from . import captions, facecams, jobs, permissions, timing, ui_login, ui_theme, watchlist
 from .api import TwitchError
 from .folders import saved_folder
 from .session import download_clips
-from .ui_common import busy_elsewhere, progress_panel, start_job
+from .ui_common import busy_elsewhere, progress_panel, start_job, tab_open, usual_time
 from .ui_downloader import STYLE_LABELS
 from .util import sanitize
 
@@ -77,6 +77,8 @@ def render(api):
             except (ValueError, TwitchError) as error:
                 st.error(str(error))
     followed = watchlist.entries()
+    if followed and not tab_open():
+        return                              # live checks wait until this tab is opened
     if not followed:
         ui_theme.empty_state("👀", "No streamers yet", "Follow a channel above - the clip "
                                                         "radar and every game page show whose "
@@ -203,7 +205,10 @@ def clip_list(api, entry, clips):
         start_job("download", "%s, top %d clips" % (entry["name"], count),
                   lambda: download_clips(list(clips), folder, "short", style, with_captions,
                                          label=entry["name"], api=api, gameplay_only=gameplay,
-                                         limit=count))
+                                         limit=count),
+                  timing.download_run(count, "short", with_captions, searches=0))
+    if not busy:
+        usual_time(timing.download_run(count, "short", with_captions, searches=0))
     if job and job.running and job.label.startswith(entry["name"]):
         progress_panel("download", where="_st_%s" % entry["id"])
 

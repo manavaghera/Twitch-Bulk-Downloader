@@ -23,3 +23,13 @@ def tmp_data(tmp_path, monkeypatch):
     monkeypatch.setattr(locks, "DATA_DIR", tmp_path)
     monkeypatch.setattr(manifest, "_FILE_LOCK", locks.FileLock("manifest-test"))
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def private_timings(tmp_path_factory, monkeypatch):
+    """Tests run on fake servers and tiny videos: their timings must never reach
+    the estimates the app shows for real runs."""
+    from clipdl import captions, timing
+    folder = tmp_path_factory.mktemp("settings")
+    monkeypatch.setattr(timing, "FILE", folder / "timings.json")
+    monkeypatch.setattr(captions, "SETTINGS", folder / "captions.json")

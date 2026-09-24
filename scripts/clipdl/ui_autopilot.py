@@ -7,8 +7,8 @@ from datetime import time as clock
 
 import streamlit as st
 
-from . import autopilot, captions, jobs, permissions, ui_login, ui_theme
-from .ui_common import busy_elsewhere, is_hosted, progress_panel, start_job
+from . import autopilot, captions, jobs, permissions, timing, ui_login, ui_theme
+from .ui_common import busy_elsewhere, is_hosted, progress_panel, start_job, usual_time
 from .ui_downloader import STYLE_LABELS, STREAMER_LABELS
 
 OUTPUTS = {"short": "Shorts only", "both": "Shorts + the 16:9 videos", "video": "Videos only"}
@@ -86,14 +86,23 @@ def run_now(api, values):
     job = jobs.latest("download")
     other = busy_elsewhere("download")
     busy = bool(other) or bool(job and job.running)
+    estimate = timing.autopilot_run(values)
     if ui_login.may_download("ap_sign_in") and st.button(
             "Run the autopilot now", type="primary", icon=":material/play_arrow:",
             width="stretch", disabled=busy):
-        start_job("download", "Autopilot run", lambda: autopilot.run(api, values))
+        start_job("download", "Autopilot run", lambda: autopilot.run(api, values), estimate)
+    if not busy:
+        usual_time(estimate)
     if other:
         st.caption("⏳ %s is downloading - this can start when it is done." % other)
     if job and job.running and job.label == "Autopilot run":
         progress_panel("download", where="_ap")
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _scheduled():
+    """Asking Task Scheduler takes a moment: once a minute is plenty."""
+    return autopilot.scheduled()
 
 
 def schedule_box(config):
@@ -101,7 +110,7 @@ def schedule_box(config):
         ui_theme.step("⏰", "Every day, by itself",
                       "Adds the autopilot to Windows Task Scheduler. The PC has to be on (and "
                       "you signed in) at that time; the web page does not need to be open.")
-        current = autopilot.scheduled()
+        current = _scheduled()
         hour, minute = (int(x) for x in config.get("time", "09:00").split(":"))
         cols = st.columns([1, 1, 1], vertical_alignment="bottom")
         at = cols[0].time_input("Run at", clock(hour, minute), key="ap_time", step=900)
@@ -109,9 +118,12 @@ def schedule_box(config):
                           icon=":material/schedule:", width="stretch"):
             ok, message = autopilot.schedule(at.strftime("%H:%M"))
             (st.success if ok else st.error)(message)
+            _scheduled.clear()
+            current = _scheduled()
         if current and cols[2].button("Stop the daily run", width="stretch"):
             ok, message = autopilot.unschedule()
             (st.success if ok else st.error)(message)
+            _scheduled.clear()
             current = None
         if current:
             ui_theme.note("✅ Scheduled. Next run: <b>%s</b> · last run: %s · status: %s" % (

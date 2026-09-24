@@ -16,7 +16,7 @@ from pathlib import Path
 
 import requests
 
-from . import ytauth, yt_quota
+from . import timing, ytauth, yt_quota
 from .config import DATA_DIR, HTTP_TIMEOUT, STOP
 from .util import load_json, save_json, say
 
@@ -81,6 +81,7 @@ def upload(path, title, description, tags=(), privacy="private", publish_at=None
     body = {"snippet": {"title": clean_title(title), "description": (description or "")[:4900],
                         "tags": clean_tags, "categoryId": "20"}, "status": status}
     size = path.stat().st_size
+    started = time.time()
     try:
         start = requests.post(upload_url, params={"uploadType": "resumable",
                                                   "part": "snippet,status"}, json=body,
@@ -99,6 +100,7 @@ def upload(path, title, description, tags=(), privacy="private", publish_at=None
     if done.status_code not in (200, 201):
         raise ValueError(_reason(done))
     video_id = done.json().get("id")
+    timing.record("upload", time.time() - started)
     records = uploaded()
     records[video_id] = dict(meta or {}, title=body["snippet"]["title"], file=str(path),
                              uploaded_at=time.time(), privacy=status["privacyStatus"],

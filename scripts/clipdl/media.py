@@ -4,19 +4,36 @@ fit one to a frame size (trimmed, captioned, with sound), and join videos.
 Everything "normalised" here comes out the same way - H.264, 30 fps, AAC
 48 kHz stereo - so the pieces of a compilation can be joined without encoding
 them all over again.
+
+Encoding uses the graphics card when it can (NVIDIA NVENC, Intel Quick Sync):
+several times faster than the processor, and it leaves the processor free for
+captions and downloads. Which one works is found out once and remembered;
+when the card fails on a video, that video is made on the processor instead.
 """
 
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
+
+from .config import DATA_DIR
+from .util import load_json, save_json
 
 FPS = 30
 TIMEOUT = 1800
 _FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-VIDEO_OUT = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-             "-r", str(FPS)]
 AUDIO_OUT = ["-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]
+ENCODER_FILE = DATA_DIR / "encoder.json"
+SOFTWARE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
+HARDWARE = {    # tried in this order; quality set to give files about libx264's crf 20 size
+    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "27",
+                   "-b:v", "0", "-pix_fmt", "yuv420p"],
+    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "25",
+                 "-pix_fmt", "nv12"],
+}
+_encoder = {}
+_encoder_lock = threading.Lock()
 
 
 def ffmpeg():
@@ -24,11 +41,56 @@ def ffmpeg():
     return find_ffmpeg()
 
 
-def run(args, cwd=None, timeout=TIMEOUT):
-    """Run ffmpeg with `args`. Returns None on success, else a short reason."""
+def encoder():
+    """The fastest H.264 encoder that works on this PC: "h264_nvenc", "h264_qsv" or
+    "libx264". Found once (a one-second test encode), then remembered."""
     exe = ffmpeg()
-    if not exe:
-        return "ffmpeg not found"
+    with _encoder_lock:
+        if exe in _encoder:
+            return _encoder[exe]
+        saved = load_json(ENCODER_FILE, {})
+        if isinstance(saved, dict) and saved.get("ffmpeg") == exe and saved.get("encoder"):
+            _encoder[exe] = saved["encoder"]
+            return _encoder[exe]
+        chosen = "libx264"
+        for name, args in HARDWARE.items():
+            if exe and _plain_run(exe, ["-f", "lavfi", "-i",
+                                        "testsrc=size=640x360:rate=30:duration=1"]
+                                  + args + ["-f", "null", "-"], timeout=30) is None:
+                chosen = name
+                break
+        _encoder[exe] = chosen
+        save_json(ENCODER_FILE, {"ffmpeg": exe, "encoder": chosen})
+        return chosen
+
+
+def video_args(software=False):
+    """ffmpeg arguments that encode the video - on the graphics card when it can."""
+    name = "libx264" if software else encoder()
+    return list(HARDWARE.get(name, SOFTWARE))
+
+
+def uses_hardware(args):
+    return any(a in HARDWARE for a in args)
+
+
+def software_instead(args):
+    """The same command with the processor's encoder in place of the card's."""
+    out, skip = [], 0
+    for i, arg in enumerate(args):
+        if skip:
+            skip -= 1
+            continue
+        if arg == "-c:v" and i + 1 < len(args) and args[i + 1] in HARDWARE:
+            hardware = HARDWARE[args[i + 1]]
+            out += SOFTWARE
+            skip = len(hardware) - 1
+            continue
+        out.append(arg)
+    return out
+
+
+def _plain_run(exe, args, cwd=None, timeout=TIMEOUT):
     try:
         done = subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-y"] + list(args),
                               capture_output=True, text=True, encoding="utf-8",
@@ -44,9 +106,41 @@ def run(args, cwd=None, timeout=TIMEOUT):
     return None
 
 
+def run(args, cwd=None, timeout=TIMEOUT):
+    """Run ffmpeg with `args`. Returns None on success, else a short reason. A
+    graphics-card encode that fails is tried once more on the processor."""
+    exe = ffmpeg()
+    if not exe:
+        return "ffmpeg not found"
+    problem = _plain_run(exe, args, cwd, timeout)
+    if problem and uses_hardware(args):
+        problem = _plain_run(exe, software_instead(args), cwd, timeout)
+    return problem
+
+
+_probed = {}                    # (path, size, modified) -> what probe() found
+
+
 def probe(path):
     """{"duration", "audio", "width", "height", "fps"} read from ffmpeg's own
-    description of the file (imageio's ffmpeg comes without ffprobe)."""
+    description of the file (imageio's ffmpeg comes without ffprobe). Remembered
+    until the file changes, since the page asks on every redraw."""
+    try:
+        stat = Path(path).stat()
+        key = (str(path), stat.st_size, stat.st_mtime)
+    except OSError:
+        key = None
+    if key in _probed:
+        return dict(_probed[key])
+    info = _probe(path)
+    if key and info["duration"]:
+        if len(_probed) > 500:
+            _probed.clear()
+        _probed[key] = dict(info)
+    return info
+
+
+def _probe(path):
     exe = ffmpeg()
     info = {"duration": 0.0, "audio": False, "width": 0, "height": 0, "fps": 0.0}
     if not exe:
@@ -109,8 +203,9 @@ def fit(source, target, width, height, start=None, end=None, subtitles=(), overl
     else:                                   # silence, so every piece can be joined
         args += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]     # -shortest ends it
         audio = ["-map", "%d:a" % inputs]
-    args += ["-filter_complex", graph, "-map", label] + audio + VIDEO_OUT + AUDIO_OUT + [
-        "-shortest", "-movflags", "+faststart", str(target.resolve())]
+    args += (["-filter_complex", graph, "-map", label] + audio + video_args()
+             + ["-r", str(FPS)] + AUDIO_OUT
+             + ["-shortest", "-movflags", "+faststart", str(target.resolve())])
     cwd = str(Path(subtitles[0]).parent) if subtitles else None
     return run(args, cwd=cwd)
 
@@ -137,8 +232,8 @@ def join_encoding(parts, target):
                   "[%d:a]aresample=48000,aformat=channel_layouts=stereo[a%d];" % (i, FPS, i, i, i))
     graph += "".join("[v%d][a%d]" % (i, i) for i in range(len(parts)))
     graph += "concat=n=%d:v=1:a=1[v][a]" % len(parts)
-    return run(args + ["-filter_complex", graph, "-map", "[v]", "-map", "[a]"] + VIDEO_OUT
-               + AUDIO_OUT + ["-movflags", "+faststart", str(Path(target).resolve())])
+    return run(args + ["-filter_complex", graph, "-map", "[v]", "-map", "[a]"] + video_args()
+               + ["-r", str(FPS)] + AUDIO_OUT + ["-movflags", "+faststart", str(Path(target).resolve())])
 
 
 def still(source, target, at=1.0):
@@ -151,7 +246,6 @@ def cut(source, target, start, end):
     """start..end seconds of a video, same size, sound kept (encoded, so the cut
     lands on the exact frame rather than the nearest keyframe)."""
     return run(["-ss", "%.3f" % start, "-t", "%.3f" % max(end - start, 0.5),
-                "-i", str(Path(source).resolve()), "-map", "0:v:0", "-map", "0:a?",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+                "-i", str(Path(source).resolve()), "-map", "0:v:0", "-map", "0:a?"]
+               + video_args() + ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                 str(Path(target).resolve())])

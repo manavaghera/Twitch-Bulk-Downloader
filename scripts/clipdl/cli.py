@@ -6,7 +6,7 @@ import os
 from . import locks
 from .api import TwitchAPI
 from .config import (CONFIG_FILE, DATA_DIR, MAX_CLIP_SECONDS, MAX_CLIPS,
-                     MIN_CLIP_SECONDS, OUTPUT_FORMATS, PROJECT_DIR, QUALITIES,
+                     MIN_CLIP_SECONDS, MIN_QUALITIES, OUTPUT_FORMATS, PROJECT_DIR, QUALITIES,
                      RANKINGS, SCRIPT_DIR, SHORT_STYLES, TIME_WINDOWS,
                      VELOCITY_MIN_SCAN)
 from .folders import check_folder, save_prefs, saved_folder
@@ -207,6 +207,17 @@ def choose_quality():
     return QUALITIES[choice - 1][1]
 
 
+def choose_min_quality():
+    """Menu 8b: the least a clip must have to be kept (0 = any)."""
+    say("")
+    say("Only keep clips of at least (most Twitch clips are 1080p or 720p):")
+    for index, (label, _height) in enumerate(MIN_QUALITIES, 1):
+        say("  %d) %s" % (index, label))
+    choice = ask_int("Pick a number [1-%d, Enter for 1]: " % len(MIN_QUALITIES),
+                     1, len(MIN_QUALITIES), default=1)
+    return MIN_QUALITIES[choice - 1][1]
+
+
 def choose_folder():
     """Menu 9: where to save. Returns (root folder, one sub-folder per game?)."""
     last, per_game = saved_folder()
@@ -290,6 +301,7 @@ def main(argv, help_text=""):
 
     # 8) how high a resolution, and 9) where to save
     max_height = choose_quality()
+    min_height = choose_min_quality()
     save_root, per_game = choose_folder()
 
     # 10) what to do about clips earlier runs already fetched. The answer
@@ -300,7 +312,7 @@ def main(argv, help_text=""):
     request = DownloadRequest(game, wanted, (window_label, window_hours),
                               (ranking_label, ranking), min_seconds, max_seconds,
                               gameplay_only, history_mode, output, short_style,
-                              max_height, save_root, per_game)
+                              max_height, save_root, per_game, min_height=min_height)
     while not locks.DOWNLOADS.acquire():
         who = locks.owner()
         say("")

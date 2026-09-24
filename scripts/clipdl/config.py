@@ -28,8 +28,8 @@ TARGET_LANGUAGE = "en"        # the channel language we keep
 MAX_CLIPS = 1000              # highest number the user may ask for
 PAGE_SIZE = 100              # Twitch allows at most 100 items per page
 MAX_PAGES = 40                # safety net: at most 4000 clips scanned
-MAX_CONCURRENT_DOWNLOADS = 3  # be polite to Twitch's CDN
-POLITE_DELAY = (1.0, 2.0)     # random seconds between starting downloads
+MAX_CONCURRENT_DOWNLOADS = 5  # still gentle on Twitch's CDN
+POLITE_DELAY = (0.3, 0.9)     # random seconds between starting downloads
 MAX_TITLE_CHARS = 70          # keep file names readable
 MAX_PATH_CHARS = 230          # stay clear of the classic Windows 260 limit
 HTTP_TIMEOUT = 20             # seconds before an API call is considered dead
@@ -107,6 +107,17 @@ MAX_HEIGHT = 1080
 QUALITIES = [
     ("Up to 1080p - smaller files, the usual Twitch maximum", MAX_HEIGHT),
     ("Maximum - the best each clip has, up to 4K", 0),
+]
+
+# The least a clip must have to be kept at all (0 = any). Unlike the cap above,
+# this filters: most clips are 1080p or 720p, few are 1440p and fewer 4K, so a
+# high minimum can leave a run short - and then the user is asked what to do.
+MIN_QUALITIES = [
+    ("Any quality", 0),
+    ("720p or better", 720),
+    ("1080p or better", 1080),
+    ("1440p or better", 1440),
+    ("4K only", 2160),
 ]
 
 

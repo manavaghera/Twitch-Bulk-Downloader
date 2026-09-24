@@ -72,15 +72,20 @@ def _pick_games(api, config):
             else:
                 say("  No Twitch category called '%s' - skipped." % name)
         return games
-    from .trends_cli import research
-    say("Finding the games that are rising right now (trend research)...")
-    found = research(api, 60)
+    from .trends_cli import recent_picks, research
+    found = recent_picks()
+    if found:
+        say("Using the trend research from %d min ago." % ((time.time() - found["at"]) / 60))
+    else:
+        say("Finding the games that are rising right now (trend research)...")
+        research(api, 60)
+        found = recent_picks() or {"rising": [], "popular": []}
     picks, seen = [], set()
     # Rising first; if too few are rising, the biggest games that are not cooling.
-    for trend in found["rising"] + [t for t in found["popular"] if t.verdict != "cooling"]:
-        if trend.id and trend.id not in seen and len(picks) < config["games"]:
-            seen.add(trend.id)
-            picks.append({"id": trend.id, "name": trend.name})
+    for trend in found["rising"] + [t for t in found["popular"] if t["verdict"] != "cooling"]:
+        if trend["id"] and trend["id"] not in seen and len(picks) < config["games"]:
+            seen.add(trend["id"])
+            picks.append({"id": trend["id"], "name": trend["name"]})
     return picks
 
 

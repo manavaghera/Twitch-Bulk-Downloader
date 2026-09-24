@@ -179,16 +179,23 @@ def gather(api, twitch_count=40, youtube_key=None):
         twitch_lookup(api, trends)
     except TwitchError as error:
         say("  Could not match every game to Twitch (%s)." % error)
-    measure_wikipedia(web, trends, sources)
+    # Wikipedia, YouTube and Twitch are separate sites with separate speed
+    # limits, and fill in separate numbers: measured side by side, the scan
+    # takes as long as the slowest of them instead of all of them together.
+    steps = [lambda: measure_wikipedia(web, trends, sources),
+             lambda: measure_all_twitch(api, trends, sources)]
     if youtube_key:
-        measure_youtube(web, youtube_key, trends, sources)
-    measure_all_twitch(api, trends, sources)
+        steps.append(lambda: measure_youtube(WebClient(stop=web.stop), youtube_key, trends,
+                                             sources))
+    with thread_pool(len(steps)) as pool:
+        for future in [pool.submit(step) for step in steps]:
+            future.result()
     return trends, sources
 
 
 def measure_wikipedia(web, trends, sources):
     """This week's and last week's page views, English + German + French."""
-    say("  Wikipedia page views, this week vs last...", end="")
+    say("  Wikipedia page views, this week vs last...")
     link_wikipedia(web, trends)
     articles = {(lang, title) for t in trends for lang, title in t.wiki_titles.items()}
     views = web_source.wiki_weekly_views(web, articles)
@@ -198,7 +205,7 @@ def measure_wikipedia(web, trends, sources):
             trend.wiki_recent += recent
             trend.wiki_previous += previous
     sources["Wikipedia page views"] = len(views)
-    say(" %d articles" % len(views))
+    say("  Wikipedia: %d articles read" % len(views))
 
 
 def _title_fits(name, title):
@@ -277,12 +284,12 @@ def link_wikipedia(web, trends, upcoming=False):
 
 def measure_youtube(web, key, trends, sources):
     """Count each game in YouTube's most popular gaming videos, US/UK/DE/FR."""
-    say("  YouTube trending gaming videos...", end="")
     texts = [text for _region, text in web_source.youtube_trending_gaming(web, key)]
     for trend in trends:
         trend.youtube_mentions = web_source.mentions(texts, trend.name)
     sources["YouTube trending videos"] = len(texts)
-    say(" %d videos" % len(texts) if texts else " nothing came back (check the key)")
+    say("  YouTube trending gaming videos: %s" % ("%d read" % len(texts) if texts
+                                                  else "nothing came back (check the key)"))
 
 
 def measure_all_twitch(api, trends, sources):
@@ -298,7 +305,7 @@ def measure_all_twitch(api, trends, sources):
         return trend
 
     done = 0
-    with thread_pool(4) as pool:
+    with thread_pool(8) as pool:         # 3 calls a game; Twitch allows 800 a minute
         for _trend in pool.map(one, on_twitch):
             done += 1
             if done % 25 == 0 or done == len(on_twitch):

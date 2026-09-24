@@ -27,9 +27,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
-from . import branding, captions, facecams
+from . import branding, captions, facecams, media, timing
 from .config import STOP
 from .download import name_tail
 from .util import say, thread_pool
@@ -39,13 +40,15 @@ SHORTS_FOLDER = "Shorts"
 CONVERT_TIMEOUT = 600       # seconds; a 60 s clip takes well under one minute
 
 FILTERS = {
+    # The background is blurred at a quarter of the size and scaled back up:
+    # it looks the same, and is about four times faster than blurring it full size.
     "blur": (
         "[0:v]split=2[bg][fg];"
-        "[bg]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
-        "boxblur=20:2,eq=brightness=-0.08[bg];"
+        "[bg]scale={qw}:{qh}:force_original_aspect_ratio=increase,crop={qw}:{qh},"
+        "boxblur=6:2,scale={w}:{h},eq=brightness=-0.08[bg];"
         "[fg]scale={w}:-2[fg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
-    ).format(w=WIDTH, h=HEIGHT),
+    ).format(w=WIDTH, h=HEIGHT, qw=WIDTH // 4, qh=HEIGHT // 4),
     "crop": (
         "[0:v]scale=-2:{h},crop={w}:{h},setsar=1[v]"
     ).format(w=WIDTH, h=HEIGHT),
@@ -121,8 +124,7 @@ def make_short(source, target, style="blur", box=None, caption_file=None, brand=
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y"] + inputs + [
         "-filter_complex", graph,
-        "-map", out_label, "-map", "0:a?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-map", out_label, "-map", "0:a?"] + media.video_args() + [
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
         str(Path(partial).resolve()),
     ]
@@ -137,6 +139,15 @@ def make_short(source, target, style="blur", box=None, caption_file=None, brand=
         return "conversion took too long"
     except OSError as error:
         return "could not start ffmpeg (%s)" % error
+    if done.returncode != 0 and media.uses_hardware(command):
+        # The graphics card said no (busy, driver): make this one on the processor.
+        try:
+            done = subprocess.run(media.software_instead(command), capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", cwd=workdir,
+                                  timeout=CONVERT_TIMEOUT, creationflags=flags)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            partial.unlink(missing_ok=True)
+            return "conversion failed (%s)" % error
     if done.returncode != 0 or not partial.exists() or partial.stat().st_size == 0:
         partial.unlink(missing_ok=True)
         last = (done.stderr or "").strip().splitlines()
@@ -181,12 +192,14 @@ def _captioned(job, source, folder):
         return None
 
 
-def convert_all(jobs, manifest, output, style, workers=2, with_captions=False):
+def convert_all(jobs, manifest, output, style, workers=None, with_captions=False):
     """Make a Short of every clip that landed; in "short" mode drop the 16:9 file.
 
     Runs after the downloads so a slow conversion never holds up a download.
-    Two at a time: ffmpeg already uses several cores for each one.
+    Two at a time on the processor (ffmpeg already uses several cores for each),
+    three when the graphics card does the encoding.
     """
+    workers = workers or (3 if media.encoder() != "libx264" else 2)
     landed = [job for job in jobs
               if manifest.status_of(job.clip_id) in ("downloaded", "skipped-exists")]
     if not landed or output not in ("short", "both"):
@@ -246,8 +259,12 @@ def convert_all(jobs, manifest, output, style, workers=2, with_captions=False):
             say("[%d/%d] Short ready: %s" % (counter[0], len(todo), source.name))
         return reason
 
+    started = time.monotonic()
     with thread_pool(workers) as pool:
         failed = sum(1 for reason in pool.map(one, todo) if reason)
+    if todo and not STOP.is_set():
+        timing.record("short_captions" if with_captions else "short",
+                      time.monotonic() - started, len(todo))
     if caption_dir:
         shutil.rmtree(caption_dir, ignore_errors=True)
 

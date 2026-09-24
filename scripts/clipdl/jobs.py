@@ -37,10 +37,13 @@ def stop_for(kind):
 
 
 class Job:
-    def __init__(self, kind, label, work):
-        self.kind = kind            # "download" or "trends"
+    def __init__(self, kind, label, work, estimate=None):
+        self.kind = kind            # "download", "trends", "studio" or "upload"
         self.label = label          # shown on the page, e.g. "VALORANT, 50 clips"
         self._work = work
+        self.estimate = estimate    # seconds the whole run usually takes (timing.py)
+        self._phase = None          # [started, total, done] of the step being counted
+        self._last_line_at = None
         self.lines = []
         self._partial = ""
         self._lock = threading.Lock()
@@ -57,6 +60,38 @@ class Job:
             chunk = self._partial + text + end
             *complete, self._partial = chunk.split("\n")
             self.lines.extend(complete)
+            now = time.time()
+            for line in complete:
+                self._count(line, now)
+                self._last_line_at = now
+
+    def _count(self, line, now):
+        """Follow the "[12/50]" lines. A new total, or a count going back, is a new
+        step (the downloads, then the Shorts...), timed from the line before it."""
+        match = _PROGRESS.search(line)
+        if not match:
+            return
+        done, total = int(match.group(1)), int(match.group(2))
+        phase = self._phase
+        if phase is None or total != phase[1] or done < phase[2]:
+            self._phase = [self._last_line_at or now, total, done]
+        else:
+            phase[2] = done
+
+    def eta(self):
+        """(seconds left in this step or None, seconds left in the whole run or None)."""
+        with self._lock:
+            phase = list(self._phase) if self._phase else None
+        step = None
+        if phase and phase[1]:
+            if phase[2] >= phase[1]:
+                step = 0.0
+            elif phase[2] >= 1:
+                step = (time.time() - phase[0]) / phase[2] * (phase[1] - phase[2])
+        whole = self.estimate - self.elapsed if self.estimate else None
+        if whole is not None and step is not None:
+            whole = max(whole, step)
+        return step, whole
 
     def text(self, last=None):
         with self._lock:
@@ -106,8 +141,9 @@ class Job:
         self.stop.set()
 
 
-def start(kind, label, work):
-    """Start `work()` in the background and return its Job. Raises Busy."""
+def start(kind, label, work, estimate=None):
+    """Start `work()` in the background and return its Job. Raises Busy.
+    `estimate`: how many seconds it usually takes, for the countdown."""
     lock = _kind_locks.setdefault(kind, threading.Lock())
     if not lock.acquire(blocking=False):
         raise Busy("Another %s is still going - wait for it or cancel it first."
@@ -119,7 +155,7 @@ def start(kind, label, work):
                    "it is done." % (who[0] if who else "Another program"))
     if kind == "download":
         locks.note_owner("The web page")
-    job = Job(kind, label, work)
+    job = Job(kind, label, work, estimate)
     job.stop.clear()                # a cancelled earlier run must not stop this one
     set_output_sink(job._write, kind)
     _latest[kind] = job
