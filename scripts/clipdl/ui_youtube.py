@@ -2,6 +2,7 @@
 they are, and download up to 4K (or record a live stream)."""
 
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -62,6 +63,9 @@ def render(api=None):
             st.warning("Install Node.js (nodejs.org) - YouTube's 4K links need it to be "
                        "unlocked, and without it downloads can fail or crawl.",
                        icon=":material/warning:")
+    problem = ytdl.cookie_problem()
+    if problem:
+        st.warning("Going on without cookies: " + problem, icon=":material/cookie:")
     checked = st.session_state.get("ytd_items") or []
     items = [item for _link, item, _problem in checked if item]
     for link, item, problem in checked:
@@ -170,12 +174,20 @@ def cookies_box():
         choices = ["none", "file"] + ["browser:%s" % b for b in ytdl.BROWSERS]
         labels = {"none": "No cookies", "file": "A cookies.txt file"}
         labels.update({"browser:%s" % b: "From %s" % b.title() for b in ytdl.BROWSERS})
+        if config["cookies"] not in choices:
+            old = config["cookies"].split(":", 1)[-1].title()
+            ytdl.save_settings(cookies="none")
+            config = ytdl.settings()
+            st.info("Your cookie choice (%s) cannot work on this PC, so it is now \"No "
+                    "cookies\". Pick Firefox or upload a cookies.txt if YouTube asks."
+                    % old, icon=":material/info:")
         choice = st.radio("Cookies", choices, index=choices.index(config["cookies"])
                           if config["cookies"] in choices else 0, format_func=labels.get,
                           key="ytd_cookies", horizontal=True)
-        if choice.startswith("browser:"):
-            st.caption("Chrome and Edge lock their cookies while open - close the browser "
-                       "first, or use Firefox or a cookies.txt file.")
+        if sys.platform == "win32":
+            st.caption("Chrome, Edge and Brave keep their cookies locked on Windows - for "
+                       "them, export a cookies.txt with the \"Get cookies.txt LOCALLY\" "
+                       "extension on youtube.com and upload it here.")
         if choice == "file":
             upload = st.file_uploader("cookies.txt (Netscape format, e.g. from the \"Get "
                                       "cookies.txt LOCALLY\" browser extension)", type=["txt"],

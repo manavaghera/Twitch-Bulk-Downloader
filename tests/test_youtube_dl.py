@@ -11,6 +11,12 @@ FFMPEG = shorts.find_ffmpeg()
 
 @pytest.fixture(autouse=True)
 def private_files(tmp_path, monkeypatch):
+    import yt_dlp.cookies
+
+    def no_real_browser(browser, **kwargs):
+        raise AssertionError("a test tried to read a real browser's cookies")
+    monkeypatch.setattr(yt_dlp.cookies, "extract_cookies_from_browser", no_real_browser)
+    monkeypatch.setattr(ytdl, "_cookie_checks", {})
     monkeypatch.setattr(ytdl, "SETTINGS", tmp_path / "youtube_dl.json")
     monkeypatch.setattr(ytdl, "COOKIE_FILE", tmp_path / "cookies.txt")
     monkeypatch.setattr(ytdl, "HISTORY", tmp_path / "history.json")
@@ -45,8 +51,7 @@ def test_cookies_are_checked_and_used(tmp_path):
     assert "web_embedded" in options["extractor_args"]["youtube"]["player_client"]
     ytdl.remove_cookies()
     assert "cookiefile" not in ytdl.options() and not ytdl.COOKIE_FILE.exists()
-    ytdl.save_settings(cookies="browser:firefox")
-    assert ytdl.options()["cookiesfrombrowser"] == ("firefox",)
+    # (reading a real browser's cookies is tested with a stand-in further down)
 
 
 def test_a_stopped_download_leaves_nothing_behind(tmp_path):
@@ -114,3 +119,100 @@ def test_recording_stops_cleanly_on_cancel(tmp_path, monkeypatch):
     assert result["by_hand"] is True
     duration = media.probe(part)["duration"]
     assert 1 < duration < 10                         # stopped early, and the file is readable
+
+
+# -- fetching only the part that is needed -------------------------------------------------
+import struct                                   # noqa: E402
+
+from clipdl import ytpiece                      # noqa: E402
+
+
+def sidx_box(timescale=1000, earliest=0, first=0, refs=((5000, 1000), (5000, 2000),
+                                                           (5000, 3000))):
+    body = struct.pack(">B3xII", 0, 1, timescale) + struct.pack(">II", earliest, first)
+    body += struct.pack(">HH", 0, len(refs))
+    for duration, size in refs:
+        body += struct.pack(">III", size, duration, 0x90000000)
+    return struct.pack(">I4s", 8 + len(body), b"sidx") + body
+
+
+def test_the_mp4_index_gives_byte_ranges():
+    head = struct.pack(">I4s", 16, b"ftyp") + b"x" * 8 + struct.pack(">I4s", 24, b"moov") + \
+        b"y" * 16
+    at = len(head)
+    head += sidx_box()
+    kinds = [kind for kind, _at, _size in ytpiece._boxes(head)]
+    assert kinds == ["ftyp", "moov", "sidx"]
+    ranges = ytpiece.parse_sidx(head, at)
+    body = len(head)                             # the first fragment follows the index
+    assert ranges[0] == (0.0, 5.0, body, body + 999)
+    assert ranges[1] == (5.0, 10.0, body + 1000, body + 2999)
+    assert ranges[2][0] == 10.0 and ranges[2][3] == body + 5999
+
+
+def test_hls_pieces_cover_the_moment():
+    playlist = "#EXTM3U\n" + "".join("#EXTINF:5.0,\nhttps://x/seg%d.ts\n" % n for n in range(10))
+
+    class Session:
+        def get(self, url, headers=None, timeout=None):
+            return type("R", (), {"text": playlist})()
+    init, pieces = ytpiece._hls_pieces(Session(), {"url": "u"}, 12, 21)
+    assert init is None
+    assert [url.rsplit("/", 1)[1] for _at, url in pieces] == ["seg2.ts", "seg3.ts", "seg4.ts"]
+    assert pieces[0][0] == 10.0
+
+
+def test_formats_are_chosen_per_protocol():
+    info = {"formats": [
+        {"protocol": "m3u8_native", "url": "a", "height": 1080, "vcodec": "avc1", "acodec": "none"},
+        {"protocol": "m3u8_native", "url": "b", "height": 2160, "vcodec": "vp09", "acodec": "none"},
+        {"protocol": "m3u8_native", "url": "c", "vcodec": "none", "acodec": "mp4a", "abr": 128},
+        {"protocol": "m3u8_native", "url": "d", "vcodec": "none", "acodec": "mp4a", "abr": 48},
+        {"protocol": "https", "url": "e", "height": 1080, "vcodec": "vp9", "acodec": "none",
+         "ext": "webm"}]}
+    video, audio = ytpiece.choose(info, 1080, "m3u8_native")
+    assert (video["url"], audio["url"]) == ("a", "c")
+    assert ytpiece.choose(info, 1080, "https") is None          # webm has no mp4 index
+
+
+# -- cookies that cannot be read -------------------------------------------------------------
+def test_locked_browser_cookies_are_skipped_not_fatal(monkeypatch):
+    monkeypatch.setattr(ytdl.sys, "platform", "win32")
+    ytdl.save_settings(cookies="browser:chrome")
+    assert "Chrome keeps its cookies locked" in ytdl.cookie_problem()
+    assert "cookiesfrombrowser" not in ytdl.options()            # carries on without them
+
+
+def test_unreadable_cookies_fall_back_and_are_not_retried_at_once(monkeypatch):
+    import yt_dlp.cookies
+    calls = []
+
+    def broken(browser, **kwargs):
+        calls.append(browser)
+        raise OSError("Could not copy Firefox cookie database")
+    monkeypatch.setattr(yt_dlp.cookies, "extract_cookies_from_browser", broken)
+    monkeypatch.setattr(ytdl, "_cookie_checks", {})
+    ytdl.save_settings(cookies="browser:firefox")
+    assert "Could not read Firefox's cookies" in ytdl.cookie_problem()
+    assert "cookiesfrombrowser" not in ytdl.options()
+    ytdl.options()
+    assert calls == ["firefox"]                                   # checked once, remembered
+
+
+def test_readable_cookies_are_used(monkeypatch):
+    import http.cookiejar
+    import yt_dlp.cookies
+    jar = http.cookiejar.CookieJar()
+    jar.set_cookie(http.cookiejar.Cookie(0, "SID", "x", None, False, ".youtube.com", True, True,
+                                         "/", True, True, None, False, None, None, {}))
+    monkeypatch.setattr(yt_dlp.cookies, "extract_cookies_from_browser", lambda b, **k: jar)
+    monkeypatch.setattr(ytdl, "_cookie_checks", {})
+    ytdl.save_settings(cookies="browser:firefox")
+    assert ytdl.cookie_problem() is None
+    assert ytdl.options()["cookiesfrombrowser"] == ("firefox",)
+
+
+def test_the_chrome_copy_error_is_explained():
+    message = ytdl.explain(Exception("ERROR: Could not copy Chrome cookie database. See "
+                                     "https://github.com/yt-dlp/yt-dlp/issues/7271"))
+    assert "Firefox" in message and "cookies.txt" in message

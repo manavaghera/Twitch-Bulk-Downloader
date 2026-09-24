@@ -45,12 +45,17 @@ def connect_box():
             st.caption("🔒 Sign in to connect a channel.")
             return
         st.markdown(
-            "1. In [Google Cloud](%s) - the project of your YouTube API key: **OAuth consent "
-            "screen** → External → add your Google account as a **test user**.\n"
-            "2. **Credentials → Create credentials → OAuth client ID → Desktop app**, then "
-            "**Download JSON**.\n"
-            "3. Drop that file here, then press **Connect** and allow access in the browser."
-            % GUIDE)
+            "1. In [Google Cloud](%s), pick the project of your YouTube API key, then "
+            "**APIs & Services → OAuth consent screen** (now called *Google Auth Platform*). "
+            "Press **Get started**: app name, your email → **Audience: External** → your "
+            "email → agree → **Create**.\n"
+            "2. Left menu **Audience** → **Test users** → **+ Add users** → your Gmail → "
+            "**Save**.\n"
+            "3. Left menu **Clients** → **+ Create client** → type **Desktop app** → "
+            "**Create** → **Download JSON**.\n"
+            "4. Drop that file here, press **Connect**, and allow access in the browser "
+            "(on *\"Google hasn't verified this app\"* press **Continue** - it is your own "
+            "app)." % GUIDE)
         upload = st.file_uploader("OAuth client JSON", type=["json"], key="yt_client")
         if upload is not None and st.session_state.get("yt_client_seen") != upload.file_id:
             st.session_state["yt_client_seen"] = upload.file_id

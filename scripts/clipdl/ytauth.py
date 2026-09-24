@@ -5,9 +5,9 @@ An API key reads public data; your channel's uploads and uploading need your
 permission. Google's way for a program on your own PC ("installed app"):
 
   1. In Google Cloud (the project of your YouTube API key): APIs & Services >
-     OAuth consent screen - External, add yourself as a test user. Then
-     Credentials > Create credentials > OAuth client ID > Desktop app, and
-     download its JSON.
+     OAuth consent screen, now called Google Auth Platform > Get started, with
+     Audience "External". Then Audience > Test users > add yourself, and
+     Clients > Create client > Desktop app > Download JSON.
   2. Give that JSON to the page (My channel > Connect). It stays in data/.
   3. Press Connect: Google's sign-in opens in your browser; after you allow it,
      Google sends the browser back to a one-time address on this PC

@@ -5,17 +5,29 @@ from pathlib import Path
 
 import streamlit as st
 
-from . import autoclip, branding, captions, jobs, timing, ui_login, ui_theme
+from . import autoclip, branding, captions, jobs, judge, timing, ui_login, ui_theme
 from .ui_common import finished_log, is_hosted, progress_panel, start_job, usual_time
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _ai_model():
+    """The local AI model's name, or None - asked once a minute, not on every redraw."""
+    return judge.model()
 
 
 def render():
     job = jobs.latest("youtube")
+    from . import ytdl
+    problem = ytdl.cookie_problem()
+    if problem:
+        st.warning("Going on without cookies: " + problem + " (Change it on the Download "
+                   "page, under cookies.)", icon=":material/cookie:")
     with st.container(border=True, key="card_autoclip"):
         ui_theme.step("✂️", "Auto clips",
                       "Paste a YouTube video or a finished live stream and say how many clips. "
-                      "The app finds the best moments - what viewers rewatched, where chat "
-                      "exploded, the loudest reactions - and makes each one a Short with "
+                      "The app finds plays and laughs - kills, clutches and aces (VALORANT), "
+                      "hype and jokes in what is said, chat going wild, what viewers "
+                      "rewatched - not just loud talking, and makes each one a Short with "
                       "captions.")
         url = st.text_input("YouTube link", key="ac_url",
                             placeholder="https://www.youtube.com/watch?v=...").strip()
@@ -29,14 +41,36 @@ def render():
                                                "crop": "Centre crop"}.get)
         with_captions = cols[3].toggle("Captions", value=captions.available(), key="ac_cap",
                                        disabled=not captions.available())
-        cols = st.columns(3)
-        use_chat = cols[0].toggle("Use the live chat (streams)", value=True, key="ac_chat",
-                                  help="For past live streams: chat bursts mark big moments. "
-                                       "Reading a long stream's chat takes a few minutes.")
-        use_sound = cols[1].toggle("Use loud moments", value=True, key="ac_sound",
-                                   help="Listens to the whole video for hype and reactions.")
-        brand = cols[2].toggle("Branding", value=branding.settings()["enabled"], key="ac_brand")
-        estimate = count * timing.per("autoclip_clip") + 60
+        cols = st.columns(5)
+        listen = cols[0].toggle("Listen for highlight words", value=captions.available(),
+                                key="ac_listen", disabled=not captions.available(),
+                                help="Transcribes the video and looks for \"ace\", "
+                                     "\"clutch\", \"let's go\", \"clip it\"... - what "
+                                     "tells a real play from loud talking. On the graphics "
+                                     "card: a few minutes for hours of stream.")
+        watch = cols[1].toggle("Watch the screen", value=True, key="ac_watch",
+                               help="A small copy of the video shows where the picture "
+                                    "moves (menus, lobbies and talking count for less) and, "
+                                    "in VALORANT, every kill you get - so 3Ks, 4Ks, aces and "
+                                    "clutches come first.")
+        use_chat = cols[2].toggle("Live chat (streams)", value=True, key="ac_chat",
+                                  help="Where the chat went off - fast, hyped or laughing "
+                                       "(\"KEKW\", \"W\", \"clip it\"). Read while the rest "
+                                       "is worked out; a few minutes for a long stream.")
+        ai = _ai_model()
+        ask_ai = cols[3].toggle("AI second opinion", value=bool(ai), key="ac_ai",
+                                disabled=not ai,
+                                help=("%s (on this computer, through Ollama) reads what was "
+                                      "said in each moment and rates it: a joke or a big play "
+                                      "beats callouts and small talk." % ai) if ai else
+                                     "Install Ollama (ollama.com), run \"ollama pull "
+                                     "llama3\" and keep it running: a free AI on this "
+                                     "computer then rates each moment.")
+        brand = cols[4].toggle("Branding", value=branding.settings()["enabled"], key="ac_brand")
+        words = st.text_input("Your own highlight words (optional, commas)", key="ac_words",
+                              placeholder="e.g. ace, spike, vandal, op, flawless")
+        extra_words = [w.strip() for w in words.split(",") if w.strip()]
+        estimate = count * timing.per("autoclip_clip") + 60 + (count * 12 if ask_ai else 0)
         busy = bool(job and job.running)
         if ui_login.may_download("ac_sign_in") and st.button(
                 "Make %d clip%s" % (count, "" if count == 1 else "s"), type="primary",
@@ -44,7 +78,8 @@ def render():
                 disabled=busy or "youtu" not in url):
             start_job("youtube", "Auto clips: %d from %s" % (count, url[-20:]),
                       lambda: autoclip.make_clips(url, int(count), int(length), style,
-                                                  with_captions, brand, use_chat, use_sound),
+                                                  with_captions, brand, use_chat, listen, watch,
+                                                  extra_words, ask_ai=ask_ai),
                       estimate)
         if not busy:
             usual_time(estimate)

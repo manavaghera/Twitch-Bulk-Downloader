@@ -190,6 +190,23 @@ def transcribe(path, config=None, _retry=True):
     return []
 
 
+def listen(path, config=None):
+    """Every word said in a long recording, as it is heard: yields (start, end, word).
+    The fast model, one pass (beam 1): for finding moments, not for captions."""
+    config = config or settings()
+    name = "base.en" if config["language"] == "en" else "base"
+    with _run_lock:
+        model = _load(name)
+        segments, _info = model.transcribe(
+            str(path), word_timestamps=True, vad_filter=True, beam_size=1,
+            language=None if config["language"] == "auto" else config["language"],
+            condition_on_previous_text=False)
+        for segment in segments:
+            for word in segment.words or []:
+                if word.word.strip():
+                    yield word.start, word.end, word.word.strip()
+
+
 def device():
     """"graphics card" or "processor" - what captions will run on."""
     return "graphics card" if gpu_ready() else "processor"

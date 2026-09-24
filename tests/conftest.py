@@ -33,3 +33,13 @@ def private_timings(tmp_path_factory, monkeypatch):
     folder = tmp_path_factory.mktemp("settings")
     monkeypatch.setattr(timing, "FILE", folder / "timings.json")
     monkeypatch.setattr(captions, "SETTINGS", folder / "captions.json")
+
+
+@pytest.fixture(autouse=True)
+def no_real_browser_cookies(monkeypatch):
+    """No test may read the cookies of a browser on this PC."""
+    import yt_dlp.cookies
+
+    def refuse(browser, **kwargs):
+        raise AssertionError("a test tried to read %s's real cookies" % browser)
+    monkeypatch.setattr(yt_dlp.cookies, "extract_cookies_from_browser", refuse)

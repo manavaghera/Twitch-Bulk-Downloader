@@ -20,6 +20,7 @@ your login session, so they stay in data/ on this PC only.
 """
 
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -34,7 +35,14 @@ HEIGHTS = (2160, 1440, 1080, 720, 480, 360)
 SETTINGS = DATA_DIR / "youtube_dl.json"
 COOKIE_FILE = DATA_DIR / "youtube_cookies.txt"
 HISTORY = DATA_DIR / "youtube_history.json"
-BROWSERS = ("firefox", "edge", "chrome", "brave", "opera", "vivaldi")
+# Chrome and the browsers built on it keep their cookies locked and encrypted
+# on Windows ("app-bound encryption", since mid-2024): no other program can read
+# them, open or closed. Firefox's can be read - or export a cookies.txt.
+LOCKED_ON_WINDOWS = ("chrome", "edge", "brave", "opera", "vivaldi", "chromium")
+BROWSERS = (("firefox",) if sys.platform == "win32"
+            else ("firefox", "chrome", "edge", "brave", "opera", "vivaldi"))
+COOKIE_CHECK_SECONDS = 300
+_cookie_checks = {}             # browser -> (when checked, problem or None)
 LIVE_POLL = (30, 300)           # seconds between checks while a stream has not started
 
 
@@ -99,7 +107,7 @@ def options():
     choice = settings()["cookies"]
     if choice == "file" and COOKIE_FILE.exists():
         opts["cookiefile"] = str(COOKIE_FILE)
-    elif choice.startswith("browser:"):
+    elif choice.startswith("browser:") and not cookie_problem():
         opts["cookiesfrombrowser"] = (choice.split(":", 1)[1],)
     if "cookiefile" in opts or "cookiesfrombrowser" in opts:
         # Signed-in sessions sometimes get "the page needs to be reloaded" from
@@ -107,6 +115,41 @@ def options():
         opts["extractor_args"] = {"youtube": {"player_client": [
             "default", "-tv_downgraded", "web_embedded"]}}
     return opts
+
+
+def cookie_problem():
+    """Why the chosen browser's cookies cannot be used right now, or None. Then
+    everything carries on without cookies (most videos need none)."""
+    choice = settings()["cookies"]
+    if not choice.startswith("browser:"):
+        return None
+    browser = choice.split(":", 1)[1]
+    if sys.platform == "win32" and browser in LOCKED_ON_WINDOWS:
+        return ("%s keeps its cookies locked and encrypted on Windows, so no other program "
+                "can read them. Use Firefox, or export a cookies.txt from %s (the \"Get "
+                "cookies.txt LOCALLY\" extension) and upload it." % (browser.title(),
+                                                                    browser.title()))
+    checked = _cookie_checks.get(browser)
+    if checked and time.time() - checked[0] < COOKIE_CHECK_SECONDS:
+        return checked[1]
+    try:
+        from yt_dlp.cookies import extract_cookies_from_browser
+        jar = extract_cookies_from_browser(browser, logger=_Quiet())
+        problem = None if any("youtube" in (c.domain or "") for c in jar) else (
+            "%s has no YouTube cookies - sign in to YouTube in %s first."
+            % (browser.title(), browser.title()))
+    except Exception as error:              # locked, encrypted, not installed...
+        problem = "Could not read %s's cookies (%s)." % (browser.title(),
+                                                         str(error).splitlines()[0][:120])
+    _cookie_checks[browser] = (time.time(), problem)
+    return problem
+
+
+class _Quiet:
+    def debug(self, message):
+        pass
+
+    info = warning = error = debug
 
 
 def explain(error):
@@ -126,16 +169,19 @@ def explain(error):
         return "The video is not available (removed, or blocked in this country)."
     if "page needs to be reloaded" in lower:
         return "YouTube asked to reload - export fresh cookies, or wait a minute and retry."
-    if "cookies" in lower and ("could not" in lower or "failed" in lower):
-        return ("Could not read that browser's cookies. Chrome and Edge lock them while "
-                "open - close the browser, or use Firefox or a cookies.txt file.")
+    if "cookie" in lower and ("could not" in lower or "failed" in lower
+                              or "decrypt" in lower or "database" in lower):
+        return ("Could not read the browser's cookies - Chrome, Edge and Brave keep them "
+                "locked and encrypted on Windows. On the YouTube tab, under cookies, pick "
+                "Firefox or upload a cookies.txt (or no cookies).")
     return text.splitlines()[0].replace("ERROR: ", "")[:240]
 
 
 # -- looking before downloading --------------------------------------------------------------
-def inspect(url):
+def inspect(url, keep_info=False):
     """What a link is: {url, id, title, channel, duration, thumbnail, live, starts,
-    heights {height: approx. bytes}, best, above_4k, audio_bytes}. Raises ValueError."""
+    heights {height: approx. bytes}, best, above_4k, audio_bytes, heatmap} - plus
+    "_info", yt-dlp's full answer, with `keep_info`. Raises ValueError."""
     from yt_dlp import YoutubeDL
     try:
         # A stream that has not started has no formats yet: still describe it.
@@ -164,7 +210,7 @@ def inspect(url):
         raise ValueError("YouTube shows this video but holds back its files - it wants to be "
                          "sure this is not a bot. Add cookies below (from a browser where "
                          "you are signed in to YouTube), then check again.")
-    return {"url": info.get("webpage_url") or url.strip(), "id": info.get("id"),
+    item = {"url": info.get("webpage_url") or url.strip(), "id": info.get("id"),
             "title": info.get("title") or "YouTube video", "channel": info.get("channel")
             or info.get("uploader") or "", "duration": duration,
             "thumbnail": info.get("thumbnail") or "", "live": info.get("live_status")
@@ -173,6 +219,9 @@ def inspect(url):
             "best": usable[0] if usable else 0,
             "above_4k": any(h > MAX_HEIGHT for h in heights), "audio_bytes": audio_bytes,
             "heatmap": info.get("heatmap") or []}
+    if keep_info:
+        item["_info"] = info
+    return item
 
 
 def _size(fmt, duration):

@@ -75,9 +75,18 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   (or MP3); a live stream is **recorded** from now until it ends or you stop it (what was
   recorded is kept), or from the very start; a scheduled stream is waited for.
 - **Auto clips** - give a YouTube video or finished live stream and a number: the app finds
-  the best moments (YouTube's "Most replayed" graph, live-chat bursts, the loudest
-  reactions - each compared with its surroundings), downloads only those parts, and makes
-  each a Short with captions and a .txt of title ideas and credit.
+  plays and laughs, not just loud talking. In **VALORANT** it counts your kills on screen
+  (the kill emblem) - 2K, 3K, 4K, aces, clutches after "last player standing" - and leaves
+  out teammates' kills while you are dead and watching them. On every video: what is said
+  (transcribed on the graphics card - "clutch", "1v3", "let's go", laughing, "no way",
+  game announcers, plus your own words), gunfire-type sound, how much happens on screen,
+  how hyped or amused the live chat was, and YouTube's "Most replayed" graph. With
+  [Ollama](https://ollama.com) running (e.g. `ollama pull llama3`), a free AI on your
+  computer reads each candidate moment and rates it - a joke or a big play beats callouts.
+  Clips start and end at pauses in the talking. Only those parts are downloaded, each is
+  checked against YouTube's own files so sound and picture line up, and each becomes a
+  Short with captions and a .txt of title ideas, credit and why it was picked. About
+  3 minutes for 5 clips from a 40-minute stream.
 - **Studio** - **trim & preview** a clip into a Short (keep only the best seconds);
   a **weekly compilation** of the top clips as one 16:9 video with an on-screen credit on
   each clip and YouTube chapters; **branding & hooks** - your logo, a hook line
@@ -220,9 +229,11 @@ pauses with 2,000 left, so Shorts checks (~101 each), repost checks (100 each) a
 uploads (1,600 each) still work. No billing account is needed.
 
 **My channel** (results and uploads) also needs an OAuth client in the same Google Cloud
-project: **OAuth consent screen** → External → add yourself as a test user; then
-**Credentials → Create credentials → OAuth client ID → Desktop app** → download the JSON
-and drop it on the My channel page. Two Google rules to know: in *Testing* mode the
+project. **APIs & Services → OAuth consent screen** (now *Google Auth Platform*) → **Get
+started**: app name and email → **Audience: External** → contact email → **Create**. Then
+**Audience → Test users → + Add users** (your Gmail), and **Clients → + Create client →
+Desktop app → Create → Download JSON**; drop the JSON on the My channel page. On
+"Google hasn't verified this app", press **Continue** - it is your own app. Two Google rules to know: in *Testing* mode the
 sign-in lasts 7 days (connect again, or publish the consent screen); and until a project
 passes YouTube's [API audit](https://support.google.com/youtube/contact/yt_api_form),
 everything it uploads stays private.

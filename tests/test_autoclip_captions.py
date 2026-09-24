@@ -173,3 +173,49 @@ def test_make_clips_end_to_end(tmp_path, monkeypatch):
         notes = Path(clip["file"]).with_suffix(".txt").read_text(encoding="utf-8")
         assert "Full video: https://www.youtube.com/watch?v=xyz&t=" in notes
     assert "10-00" in Path(result["clips"][0]["file"]).name       # the moment at 10:00
+
+
+# -- telling gameplay from loud talking ----------------------------------------------------
+def test_highlight_words_are_found(monkeypatch):
+    from clipdl import highlights
+    said = [(10.0, 10.3, "let's"), (10.3, 10.6, "go!"), (40.0, 40.4, "that's"),
+            (40.4, 40.8, "an"), (40.8, 41.2, "ace"), (70.0, 70.5, "1v3"),
+            (71.0, 71.5, "clutch"), (100.0, 100.4, "nice"), (100.4, 100.8, "weather")]
+    monkeypatch.setattr(highlights.captions, "available", lambda: True)
+    monkeypatch.setattr(highlights.captions, "gpu_ready", lambda: True)
+    monkeypatch.setattr(highlights.captions, "listen", lambda sound: iter(said))
+    curve, heard = highlights.hype_curve("sound.m4a", 120, extra_words=["weather"])
+    assert heard[10] == ["let's go"] and heard[40] == ["ace"]
+    assert "1v3" in heard[70] and "clutch" in heard[71]
+    assert "weather" in heard[100]                   # the user's own word
+    assert curve[71] > curve[10] > curve[55] == 0    # clutch + 1v3 beat "let's go"; silence 0
+
+
+def test_still_screens_are_turned_down():
+    score = [0.5] * 600
+    for t in range(100, 130):
+        score[t] = 0.9                               # loud, but on a still screen (a lobby)
+    for t in range(400, 430):
+        score[t] = 0.8                               # a little less loud, lots happening
+    motion = [0.0] * 300 + [10.0] * 300
+    curves = {"loud": score}
+    plain = autoclip.pick(autoclip.blend(curves, 600), 1, 30)[0][0]
+    gated = autoclip.pick(autoclip.blend(curves, 600, gate=motion), 1, 30)[0][0]
+    assert 90 <= plain <= 110 and 390 <= gated <= 410
+
+
+@pytest.mark.skipif(not FFMPEG, reason="ffmpeg is not installed")
+def test_action_sound_is_not_just_loudness(tmp_path):
+    from clipdl import highlights
+    sound = tmp_path / "sound.m4a"
+    # 0-20 s a loud low hum (like a voice), 30-33 s quieter noise bursts (like gunfire).
+    subprocess.run([FFMPEG, "-loglevel", "error", "-f", "lavfi", "-i",
+                    "sine=frequency=180:duration=60", "-f", "lavfi", "-i",
+                    "anoisesrc=color=white:duration=60:amplitude=0.3", "-filter_complex",
+                    "[0:a]volume='if(lt(t,20),1,0.01)':eval=frame[a];"
+                    "[1:a]volume='if(between(t,30,33),1,0.001)':eval=frame[b];"
+                    "[a][b]amix=inputs=2:normalize=0", "-c:a", "aac", str(sound)], check=True)
+    loud = highlights.loud_levels(sound, 60)
+    action = highlights.action_curve(sound, 60)
+    assert loud.index(max(loud)) < 20                # plain loudness points at the hum
+    assert 30 <= action.index(max(action)) <= 36     # the action sound points at the bursts
