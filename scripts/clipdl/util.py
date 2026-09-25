@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import threading
+import unicodedata
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -107,6 +108,21 @@ def sanitize(text, max_len=MAX_TITLE_CHARS):
     if cleaned.upper().split(".")[0] in RESERVED_NAMES:
         cleaned = "_" + cleaned
     return cleaned or "clip"
+
+
+def short_title(text, limit=32):
+    """A title cut down for a file name: no emoji, safe characters, whole words,
+    at most `limit` characters."""
+    kept = "".join(ch for ch in str(text) if ch != "️" and (
+        unicodedata.category(ch) not in ("So", "Sk", "Cs", "Co", "Cn", "Cf") or ch.isalnum()))
+    kept = sanitize(kept, 400)
+    if len(kept) > limit:
+        cut = kept[:limit + 1]
+        kept = cut.rsplit(" ", 1)[0] if " " in cut[limit // 2:] else kept[:limit]
+    kept = kept.rstrip(" .,-_([{")
+    if kept.count("(") > kept.count(")"):         # a bracket the cut left open
+        kept = kept.rsplit("(", 1)[0].rstrip(" .,-_")
+    return kept or "clip"
 
 
 def describe_height(height):

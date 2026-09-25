@@ -12,7 +12,7 @@ from yt_dlp.utils import DownloadError
 from .config import (MAX_CONCURRENT_DOWNLOADS, MAX_HEIGHT, MAX_PATH_CHARS,
                      POLITE_DELAY, STOP, ydl_format)
 from . import timing
-from .util import describe_height, human_size, sanitize, say, thread_pool
+from .util import describe_height, human_size, sanitize, say, short_title, thread_pool
 
 # ---------------------------------------------------------------------------
 # Downloading
@@ -76,12 +76,35 @@ def trim_for_path(folder, prefix, title, extension=".mp4"):
     return title[:allowance].rstrip(" .") or "clip"
 
 
+NAME_STREAMER, NAME_TITLE = 20, 32     # characters of each kept in a clip's file name
+NAMES = (re.compile(r"^\d+ (.+?) - (.*)\.mp4$"),         # 012 Streamer - Title.mp4
+         re.compile(r"^\d+_(.+)_\((.*)\)\.mp4$"),        # 012_Streamer_(Title).mp4, before
+         re.compile(r"^\d+_(.+?)_(.*)\.mp4$"))             # 012_Streamer_Title.mp4, long ago
+
+
+def clip_name(index, streamer, title):
+    """A clip's file name: its number, the streamer and a short title."""
+    return "%03d %s - %s.mp4" % (index, sanitize(streamer or "unknown", NAME_STREAMER),
+                                 short_title(title or "clip", NAME_TITLE))
+
+
+def clip_key(streamer, title):
+    """Streamer and short title, letters and digits only - the same for a clip
+    whatever number, or naming style, its file got."""
+    def plain(text):
+        return "".join(ch for ch in text.lower() if ch.isalnum())
+    return "%s|%s" % (plain(sanitize(streamer or "unknown", NAME_STREAMER)),
+                      plain(short_title(title or "clip", NAME_TITLE)))
+
+
 def name_tail(filename):
-    """The 'Streamer_(Title).mp4' part of a name, used to match a rerun to a file."""
-    tail = filename.split("_", 1)[1] if "_" in filename else filename
-    # Dropping the brackets lets files saved before titles were bracketed still
-    # match the name this run would give them, so they are not fetched twice.
-    return tail.replace("(", "").replace(")", "")
+    """The key of a clip's file name (see clip_key), used to match a rerun to a
+    file - names from before the short style still match."""
+    for pattern in NAMES:
+        found = pattern.match(filename)
+        if found:
+            return clip_key(*found.groups())
+    return filename.lower()
 
 
 def next_free_number(folder):
@@ -94,7 +117,7 @@ def next_free_number(folder):
     """
     highest = 0
     for path in folder.glob("*.mp4"):
-        match = re.match(r"(\d+)_", path.name)
+        match = re.match(r"(\d+)[_ ]", path.name)
         if match:
             highest = max(highest, int(match.group(1)))
     return highest + 1
@@ -104,7 +127,7 @@ def build_jobs(clips, folder, game_name, start_index=1):
     """Turn clips into download jobs, spotting files an earlier run already got."""
     folder.mkdir(parents=True, exist_ok=True)
 
-    # Index existing .mp4 files by the "streamer_(title).mp4" part of the name.
+    # Index existing .mp4 files by the streamer and title part of the name.
     # View counts shift between runs, so the same clip can get a different rank
     # number; matching on the part after the number makes resume reliable.
     existing_by_tail = {}
@@ -120,12 +143,11 @@ def build_jobs(clips, folder, game_name, start_index=1):
 
     jobs = []
     for index, clip in enumerate(clips, start_index):
-        streamer = sanitize(clip.get("broadcaster_name") or "unknown", 40)
-        prefix = "%03d_%s_(" % (index, streamer)
-        title = trim_for_path(folder, prefix, sanitize(clip.get("title") or "clip"),
-                              ").mp4")
-        filename = prefix + title + ").mp4"
-        tail = name_tail(filename)
+        streamer, title = clip.get("broadcaster_name"), clip.get("title")
+        filename = clip_name(index, streamer, title)
+        prefix = filename.split(" - ", 1)[0] + " - "
+        filename = prefix + trim_for_path(folder, prefix, filename[len(prefix):-4]) + ".mp4"
+        tail = clip_key(streamer, title)
         jobs.append(DownloadJob(clip, folder / filename, existing_by_tail.pop(tail, None),
                                 game_name, index))
     return jobs

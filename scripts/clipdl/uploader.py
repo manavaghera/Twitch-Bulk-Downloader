@@ -37,14 +37,14 @@ def uploaded_clips():
 
 
 def read_sidecar(video):
-    """The title ideas, description and hashtags from a video's .txt (or empty)."""
-    try:
-        text = Path(video).with_suffix(".txt").read_text(encoding="utf-8")
-    except OSError:
+    """The title ideas, description and hashtags kept for a video (or empty)."""
+    from .titles import read_notes
+    text = read_notes(video)
+    if not text:
         return {"titles": [], "description": "", "hashtags": []}
     sections, current = {}, None
     for line in text.splitlines():
-        if line in ("TITLE OPTIONS", "DESCRIPTION", "HASHTAGS"):
+        if re.fullmatch(r"[A-Z][A-Z ]+", line):     # TITLE OPTIONS, DESCRIPTION, HASHTAGS...
             current = line
             sections[current] = []
         elif current:

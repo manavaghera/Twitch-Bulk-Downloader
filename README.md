@@ -60,8 +60,9 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   with a live preview.
 - **Shorts that are ready to post** - three looks (blurred background, centre crop, and
   **facecam on top + gameplay below**), optional **burned-in captions** made on your PC
-  (free speech to text, no API), and a **.txt of title ideas, a description with credit,
-  and hashtags** (including the game's trending tags) beside every video.
+  (free speech to text, no API). Title ideas, a description with credit and hashtags
+  (including the game's trending tags) are kept by the app and filled in when you upload -
+  the folders hold only the videos, named short (`012 Streamer - Short title.mp4`).
 - **Release calendar** - upcoming launches from Steam wishlists on a month calendar with
   countdowns, and an **.ics file** that puts them in Google Calendar / Outlook / iPhone
   with a reminder a few days before.
@@ -85,7 +86,7 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   computer reads each candidate moment and rates it - a joke or a big play beats callouts.
   Clips start and end at pauses in the talking. Only those parts are downloaded, each is
   checked against YouTube's own files so sound and picture line up, and each becomes a
-  Short with captions and a .txt of title ideas, credit and why it was picked. About
+  Short with captions (title ideas and credit are kept for uploading). About
   3 minutes for 5 clips from a 40-minute stream.
 - **Studio** - **trim & preview** a clip into a Short (keep only the best seconds);
   a **weekly compilation** of the top clips as one 16:9 video with an on-screen credit on

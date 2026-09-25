@@ -149,7 +149,7 @@ def last_box():
         for error in last.get("errors", []):
             st.warning(error)
         folder = last.get("folder")
-        ui_theme.note("Saved in <b>%s</b> - each video has a .txt with title ideas." %
+        ui_theme.note("Saved in <b>%s</b>." %
                       ui_theme.escape(folder or "?"))
         if folder and hasattr(os, "startfile") and not is_hosted() and os.path.isdir(folder):
             if st.button("Open the folder", icon=":material/folder_open:", key="ap_open"):

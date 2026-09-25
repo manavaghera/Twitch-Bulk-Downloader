@@ -20,8 +20,8 @@ a joke or a big play beats callouts and small talk.
 Only the chosen stretches are downloaded - not the whole four-hour stream - each
 checked against YouTube's own files so sound and picture line up
 (synccheck.py), then made into a Short (blurred background or crop, captions,
-branding) with a .txt of title ideas and credit, in
-<download folder>/YouTube/Auto clips/<video>/.
+branding) in <download folder>/YouTube/Auto clips/<video>/ - title ideas and
+credit are kept by the app for uploading, not as files beside the clips.
 """
 
 import json
@@ -32,12 +32,12 @@ import time
 from pathlib import Path
 
 from . import (branding, captions, highlights, judge, kills, media, moments, synccheck,
-               timing, ytdl, ytpiece)
+               timing, titles, ytdl, ytpiece)
 from .config import STOP
 from .folders import saved_folder
 from .moments import SKIP_END, SKIP_START, blend, bumps, pick   # noqa: F401 (used by tests)
 from .shorts import make_short
-from .util import sanitize, say, thread_pool
+from .util import sanitize, say, short_title, thread_pool
 
 CHAT_DELAY = 8                  # seconds chat reacts after the moment it reacts to
 LABELS = {"replayed": "most replayed", "chat": "chat went wild", "hype": "what was said",
@@ -294,8 +294,8 @@ def make_clips(url, count=5, length=30, style="blur", with_captions=True, use_br
             piece, sync = synccheck.ensure(Path(piece), start, item.get("_sound"),
                                            item.get("_watch"))
             say("  %s" % sync[0].upper() + sync[1:])
-            target = folder / sanitize("%02d %s at %s.mp4" % (
-                rank, item["title"][:50], timing.clock(start).replace(":", "-")), 120)
+            target = folder / ("%02d %s (%s).mp4" % (
+                rank, short_title(item["title"], 28), timing.clock(start).replace(":", "-")))
             ass, words = None, []
             if with_captions and captions.available():
                 ass = work / ("captions%02d.ass" % rank)
@@ -310,8 +310,7 @@ def make_clips(url, count=5, length=30, style="blur", with_captions=True, use_br
             if problem:
                 say("  Could not make the Short: %s" % problem)
                 continue
-            target.with_suffix(".txt").write_text(
-                notes(item, start, words, why + [sync]), encoding="utf-8")
+            titles.save_notes([(target, notes(item, start, words, why + [sync]))])
             results.append({"file": str(target), "start": start, "end": end,
                             "score": value, "why": why})
             say("  Ready: %s" % target.name)

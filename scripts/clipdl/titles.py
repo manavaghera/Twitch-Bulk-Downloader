@@ -6,8 +6,14 @@ per clip, because the best hook depends on the moment. The description always
 credits the streamer and links the original clip.
 """
 
+import os
 import re
+import threading
 import zlib
+from pathlib import Path
+
+from .config import DATA_DIR
+from .util import load_json, save_json
 
 # Short tags people actually search, for games with long names.
 GAME_TAGS = {
@@ -111,11 +117,38 @@ def sidecar_text(suggestion):
     return "\n".join(lines) + "\n"
 
 
+# Title ideas live in the app's data folder, not as a .txt beside each video: the
+# download folders hold only the clips. The upload page and the Studio read them here.
+NOTES_FILE = DATA_DIR / "clip_notes.json"
+_notes_lock = threading.Lock()
+
+
+def save_notes(pairs):
+    """Keep the notes for each (video path, text) - many at once, one write."""
+    with _notes_lock:
+        notes = load_json(NOTES_FILE, {})
+        notes = notes if isinstance(notes, dict) else {}
+        for video, text in pairs:
+            notes[str(Path(video).resolve())] = text
+        if len(notes) > 5000:               # forget videos that are gone
+            notes = {k: v for k, v in notes.items() if os.path.exists(k)}
+        save_json(NOTES_FILE, notes)
+
+
+def read_notes(video):
+    """The notes kept for a video - or its .txt from before - or ""."""
+    with _notes_lock:
+        notes = load_json(NOTES_FILE, {})
+    text = notes.get(str(Path(video).resolve())) if isinstance(notes, dict) else None
+    if text is None:
+        try:
+            text = Path(video).with_suffix(".txt").read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+    return text
+
+
 def write_sidecar(video_path, suggestion):
-    """Save the suggestions as <video name>.txt beside the video."""
-    path = video_path.with_suffix(".txt")
-    try:
-        path.write_text(sidecar_text(suggestion), encoding="utf-8")
-    except OSError:
-        return None
-    return path
+    """Keep the title ideas, description and hashtags for a video."""
+    save_notes([(video_path, sidecar_text(suggestion))])
+    return video_path

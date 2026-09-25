@@ -6,8 +6,7 @@ One run:
   2. downloads each game's best new clips (trending, 10-60 s, gameplay,
      never one you already have, only streamers your permission list allows)
   3. makes the Shorts - with captions and the facecam look if chosen
-  4. writes title ideas, a description and hashtags beside every file
-  5. leaves a short report in the day's folder
+  4. keeps title ideas, a description and hashtags for every file (for uploads)
 
 Settings live in data/autopilot.json. Run it from the web page, or on a timer
 with scripts/autopilot.py - the page can put that in Windows Task Scheduler.
@@ -130,7 +129,6 @@ def run(api, config=None):
                 summary["errors"].append("%s: %s" % (game["name"], str(error)[:120]))
     summary["seconds"] = round(time.time() - started)
     save_json(LAST_FILE, summary)
-    _report(folder, summary)
     try:
         cleanup.auto_clean()
         alerts.autopilot_done(summary)
@@ -149,17 +147,6 @@ def _count(result):
 
 def total(summary):
     return summary.get("radar", 0) + sum(n for _g, n in summary.get("games", []))
-
-
-def _report(folder, summary):
-    lines = ["Autopilot run, %s" % time.strftime("%d %b %Y %H:%M",
-                                                 time.localtime(summary["started"])), ""]
-    lines += ["%-40s %d new clip(s)" % (name, n) for name, n in summary["games"]]
-    if summary["radar"]:
-        lines.append("Clip radar: %d new clip(s)" % summary["radar"])
-    lines += [""] + ["Problem: %s" % e for e in summary["errors"]]
-    lines.append("Every video has a .txt beside it with title ideas, a description and hashtags.")
-    (folder / "autopilot_report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

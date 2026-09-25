@@ -42,3 +42,30 @@ def test_wikipedia_title_must_name_the_game():
     assert _title_fits("Helldivers 2", "Helldivers 2")
     assert _title_fits("Hades II", "Hades II (video game)")
     assert not _title_fits("Witchbrook", "Chucklefish")
+
+
+# -- clip file names ---------------------------------------------------------------------
+def test_clip_names_are_short():
+    from clipdl import download
+    from clipdl.util import short_title
+    assert download.clip_name(13, "Jynxzi", "I KILLED A PRO (Hiko) 😂") == \
+        "013 Jynxzi - I KILLED A PRO (Hiko).mp4"                   # no emoji
+    long = download.clip_name(7, "juliii", "4k fissdeput or somth and then he did the "
+                                           "craziest thing ever on bind")
+    assert long == "007 juliii - 4k fissdeput or somth and then.mp4"  # whole words, short
+    assert short_title("한동숙 clutch 🔥🔥 insane") == "한동숙 clutch insane"
+    assert short_title("a (very long bracket that the cut would leave open)", 20) == "a"
+
+
+def test_clips_named_the_old_way_are_still_known(tmp_path):
+    from clipdl import download
+    folder = tmp_path / "VALORANT"
+    folder.mkdir()
+    old = folder / "013_Jynxzi_(I KILLED A PRO (Hiko) 😂).mp4"
+    old.write_bytes(b"clip")
+    clip = {"id": "x", "broadcaster_name": "Jynxzi", "title": "I KILLED A PRO (Hiko) 😂",
+            "url": "https://clips.twitch.tv/x"}
+    job, = download.build_jobs([clip], folder, "VALORANT", start_index=21)
+    assert job.path.name == "021 Jynxzi - I KILLED A PRO (Hiko).mp4"
+    assert job.existing == old                        # not downloaded again
+    assert download.next_free_number(folder) == 14    # old style numbers still count

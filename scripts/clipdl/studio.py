@@ -6,7 +6,7 @@ again from Twitch into data/studio_cache - kept for a few clips, then tidied.
 
   trim_short     the best 20 s of a 60 s clip, as a Short (captions, branding)
   compilation    the week's top clips as one 16:9 video: an on-screen credit on
-                 each clip, then a .txt with YouTube chapters and credits
+                 each clip, and YouTube chapters and credits shown beside it
 """
 
 import shutil
@@ -183,7 +183,7 @@ def _stamp(seconds):
 
 
 def compilation(entries, title, countdown=True, use_brand=False, folder=None):
-    """The clips (best first) as one video with credits. Returns {"video", "notes",
+    """The clips (best first) as one video with credits. Returns {"video", "notes" (text),
     "chapters", "skipped"} - or raises ValueError when nothing could be made."""
     if not media.ffmpeg():
         raise ValueError("Making videos needs ffmpeg, and it is not installed.")
@@ -238,8 +238,8 @@ def compilation(entries, title, countdown=True, use_brand=False, folder=None):
             problem = media.join_encoding(parts, video)
             if problem:
                 raise ValueError(problem)
-        notes = folder / (name + ".txt")
-        notes.write_text(description(title, chapters, entries), encoding="utf-8")
+        notes = description(title, chapters, entries)
+        titles.save_notes([(video, notes)])
         timing.record("compilation", time.time() - started, len(order))
         say("Compilation ready: %s (%s long)" % (video, _stamp(media.probe(video)["duration"])))
         return {"video": video, "notes": notes, "chapters": chapters, "skipped": skipped}

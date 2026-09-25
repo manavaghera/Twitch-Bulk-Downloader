@@ -233,25 +233,27 @@ def channel_logins(api, jobs):
 
 
 def write_sidecars(jobs, manifest, game, api=None):
-    """A .txt of title options, a description and hashtags beside every file made."""
+    """Title options, a description and hashtags for every file made - kept by the
+    app for the upload page, not as files beside the clips."""
     from .web import normalize_name
     game_name = (game or {}).get("name", "")
     jobs = [job for job in jobs
             if manifest.status_of(job.clip_id) in ("downloaded", "skipped-exists")]
     logins = channel_logins(api, jobs)
-    tags_of, written = {}, 0            # each game's trending tags, looked up once
+    tags_of, notes = {}, []             # each game's trending tags, looked up once
     for job in jobs:
         name = job.game_name or game_name
         if name not in tags_of:
             tags_of[name] = trending_tags(name) if name else []
         suggestion = titles.suggest(job.title, job.streamer, name, normalize_name(name),
                                     job.url, tags_of[name], logins.get(job.broadcaster_id))
-        for path in {job.path, getattr(job, "short", None)} - {None}:
-            if path.exists() and titles.write_sidecar(path, suggestion):
-                written += 1
-    if written:
-        say("Titles    : title ideas, a description and hashtags saved beside %d file(s) "
-            "(.txt)" % written)
+        text = titles.sidecar_text(suggestion)
+        notes += [(path, text) for path in {job.path, getattr(job, "short", None)} - {None}
+                  if path.exists()]
+    if notes:
+        titles.save_notes(notes)
+        say("Titles    : title ideas, a description and hashtags ready for %d file(s) "
+            "(used when uploading)" % len(notes))
 
 
 def keep_gameplay(clips, api=None):

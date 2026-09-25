@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from clipdl import branding, media, shorts, studio
+from clipdl import branding, media, shorts, studio, titles
 
 FFMPEG = shorts.find_ffmpeg()
 pytestmark = pytest.mark.skipif(not FFMPEG, reason="ffmpeg is not installed")
@@ -87,7 +87,8 @@ def test_trim_makes_a_short_with_title_file(library):
     assert problem is None
     info = media.probe(path)
     assert (info["width"], info["height"]) == (1080, 1920) and abs(info["duration"] - 3) < 0.2
-    assert path.with_suffix(".txt").exists()
+    assert not path.with_suffix(".txt").exists()                     # only the video
+    assert "TITLE OPTIONS" in titles.read_notes(path)                # the ideas, kept by the app
 
 
 def test_weekly_compilation(library):
@@ -99,6 +100,7 @@ def test_weekly_compilation(library):
     info = media.probe(result["video"])
     assert (info["width"], info["height"]) == (1920, 1080) and abs(info["duration"] - 10) < 0.3
     assert decodes(result["video"])
-    notes = result["notes"].read_text(encoding="utf-8")
+    notes = titles.read_notes(result["video"])                       # kept by the app
+    assert notes == result["notes"] and not result["video"].with_suffix(".txt").exists()
     assert "0:00 #3 한동숙" in notes and "0:04 #1 Tarik" in notes
     assert "https://twitch.tv/tarik" in notes

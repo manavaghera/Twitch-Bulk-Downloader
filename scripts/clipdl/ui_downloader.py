@@ -294,7 +294,7 @@ def render_form(api):
                       min_height].lower() if min_height else "")),
                  ("Extras", ", ".join(x for x in (
                      STYLE_LABELS[short_style].lower() if output != "video" else "",
-                     "captions" if with_captions else "", "title ideas (.txt)") if x)),
+                     "captions" if with_captions else "") if x) or "-"),
                  ("Streamers", STREAMER_LABELS[streamer_mode]),
                  ("Save to", str(target) if target else "-"),
                  ("Delivery", "folder + .zip" if as_zip else "folder")])

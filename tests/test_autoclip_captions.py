@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from clipdl import autoclip, captions, shorts
+from clipdl import autoclip, captions, shorts, titles
 
 FFMPEG = shorts.find_ffmpeg()
 
@@ -170,7 +170,8 @@ def test_make_clips_end_to_end(tmp_path, monkeypatch):
     for clip in result["clips"]:
         info = media.probe(clip["file"])
         assert (info["width"], info["height"]) == (1080, 1920)
-        notes = Path(clip["file"]).with_suffix(".txt").read_text(encoding="utf-8")
+        assert not Path(clip["file"]).with_suffix(".txt").exists()   # only the clip
+        notes = titles.read_notes(clip["file"])
         assert "Full video: https://www.youtube.com/watch?v=xyz&t=" in notes
     assert "10-00" in Path(result["clips"][0]["file"]).name       # the moment at 10:00
 

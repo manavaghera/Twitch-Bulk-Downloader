@@ -6,8 +6,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from . import (branding, captions, jobs, media, studio, timing, ui_captions, ui_login,
-               ui_theme)
+from . import (branding, captions, jobs, media, studio, timing, titles, ui_captions,
+               ui_login, ui_theme)
 from .ui_common import finished_log, is_hosted, progress_panel, start_job, usual_time
 from .ui_downloader import STYLE_LABELS
 
@@ -45,10 +45,10 @@ def _deliver(path, key):
     elif Path(path).stat().st_size < MAX_DOWNLOAD_MB * 1e6:
         cols[0].download_button("Download", Path(path).read_bytes(), file_name=Path(path).name,
                                 mime="video/mp4", key=key + "_dl", width="stretch")
-    notes = Path(path).with_suffix(".txt")
-    if notes.exists():
+    notes = titles.read_notes(path)
+    if notes:
         with st.expander("Title ideas, description and chapters", icon=":material/notes:"):
-            st.code(notes.read_text(encoding="utf-8"), language=None)
+            st.code(notes, language=None)
 
 
 # -- trim & preview --------------------------------------------------------------------
@@ -119,7 +119,7 @@ def compilation_box():
     with st.container(border=True, key="card_comp"):
         ui_theme.step("🎞️", "Weekly compilation",
                       "The week's most viewed clips as one video: an on-screen credit on "
-                      "every clip, and YouTube chapters plus credits in a .txt beside it.")
+                      "every clip, and YouTube chapters plus credits to copy.")
         cols = st.columns(4, vertical_alignment="bottom")
         days = cols[0].segmented_control("From the last", (7, 14, 30), default=7, required=True,
                                          format_func="{} days".format, key="cp_days")

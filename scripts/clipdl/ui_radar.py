@@ -111,8 +111,7 @@ def render(api):
 def download_box(api, shown, gameplay=True):
     job = jobs.latest("download")
     with st.container(border=True, key="card_radar_dl"):
-        ui_theme.step("⬇️", "Grab clips", "Downloads land in a 'Clip radar' folder, each "
-                                           "with a .txt of title ideas and hashtags.")
+        ui_theme.step("⬇️", "Grab clips", "Downloads land in a 'Clip radar' folder.")
         by_id = {c["id"]: c for c in shown}
         labels = {c["id"]: "#%d %s - %s" % (i, c.get("broadcaster_name"),
                                            (c.get("title") or "")[:50])
