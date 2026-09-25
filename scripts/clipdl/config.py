@@ -31,7 +31,6 @@ MAX_PAGES = 40                # safety net: at most 4000 clips scanned
 MAX_CONCURRENT_DOWNLOADS = 5  # still gentle on Twitch's CDN
 POLITE_DELAY = (0.3, 0.9)     # random seconds between starting downloads
 MAX_TITLE_CHARS = 70          # keep file names readable
-MAX_PATH_CHARS = 230          # stay clear of the classic Windows 260 limit
 HTTP_TIMEOUT = 20             # seconds before an API call is considered dead
 HTTP_ATTEMPTS = 5             # how many times to retry a failing API call
 

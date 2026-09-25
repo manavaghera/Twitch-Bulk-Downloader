@@ -37,7 +37,7 @@ from .config import STOP
 from .folders import saved_folder
 from .moments import SKIP_END, SKIP_START, blend, bumps, pick   # noqa: F401 (used by tests)
 from .shorts import make_short
-from .util import sanitize, say, short_title, thread_pool
+from .util import sanitize, say, thread_pool
 
 CHAT_DELAY = 8                  # seconds chat reacts after the moment it reacts to
 LABELS = {"replayed": "most replayed", "chat": "chat went wild", "hype": "what was said",
@@ -294,8 +294,11 @@ def make_clips(url, count=5, length=30, style="blur", with_captions=True, use_br
             piece, sync = synccheck.ensure(Path(piece), start, item.get("_sound"),
                                            item.get("_watch"))
             say("  %s" % sync[0].upper() + sync[1:])
-            target = folder / ("%02d %s (%s).mp4" % (
-                rank, short_title(item["title"], 28), timing.clock(start).replace(":", "-")))
+            channel = sanitize(item["channel"] or "clip", 20)
+            target, number = folder / ("%d %s.mp4" % (rank, channel)), 1
+            while target.exists():              # an earlier run's clip keeps its file
+                number += 1
+                target = folder / ("%d %s (%d).mp4" % (rank, channel, number))
             ass, words = None, []
             if with_captions and captions.available():
                 ass = work / ("captions%02d.ass" % rank)

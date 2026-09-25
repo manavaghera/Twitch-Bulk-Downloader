@@ -173,7 +173,8 @@ def test_make_clips_end_to_end(tmp_path, monkeypatch):
         assert not Path(clip["file"]).with_suffix(".txt").exists()   # only the clip
         notes = titles.read_notes(clip["file"])
         assert "Full video: https://www.youtube.com/watch?v=xyz&t=" in notes
-    assert "10-00" in Path(result["clips"][0]["file"]).name       # the moment at 10:00
+    assert [Path(c["file"]).name for c in result["clips"]] == ["1 Streamer.mp4",
+                                                               "2 Streamer.mp4"]
 
 
 # -- telling gameplay from loud talking ----------------------------------------------------

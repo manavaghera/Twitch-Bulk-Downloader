@@ -45,27 +45,49 @@ def test_wikipedia_title_must_name_the_game():
 
 
 # -- clip file names ---------------------------------------------------------------------
-def test_clip_names_are_short():
+class _History:
+    """A download history (manifest) holding the given {clip id: file}."""
+
+    def __init__(self, files):
+        self.data = {"clips": {cid: {"file": str(path)} for cid, path in files.items()}}
+
+
+def _clip(cid, streamer, title="a clip"):
+    return {"id": cid, "broadcaster_name": streamer, "title": title,
+            "url": "https://clips.twitch.tv/" + cid}
+
+
+def test_clip_names_are_a_number_and_the_streamer(tmp_path):
     from clipdl import download
     from clipdl.util import short_title
-    assert download.clip_name(13, "Jynxzi", "I KILLED A PRO (Hiko) 😂") == \
-        "013 Jynxzi - I KILLED A PRO (Hiko).mp4"                   # no emoji
-    long = download.clip_name(7, "juliii", "4k fissdeput or somth and then he did the "
-                                           "craziest thing ever on bind")
-    assert long == "007 juliii - 4k fissdeput or somth and then.mp4"  # whole words, short
+    jobs = download.build_jobs([_clip("a", "Jynxzi", "I KILLED A PRO 😂"), _clip("b", "Tarik"),
+                                _clip("c", "Jynxzi", "again")], tmp_path, "VALORANT")
+    assert [job.path.name for job in jobs] == ["1 Jynxzi.mp4", "2 Tarik.mp4", "3 Jynxzi.mp4"]
     assert short_title("한동숙 clutch 🔥🔥 insane") == "한동숙 clutch insane"
-    assert short_title("a (very long bracket that the cut would leave open)", 20) == "a"
 
 
-def test_clips_named_the_old_way_are_still_known(tmp_path):
+def test_clips_already_downloaded_are_known_and_renumbered(tmp_path):
     from clipdl import download
-    folder = tmp_path / "VALORANT"
-    folder.mkdir()
-    old = folder / "013_Jynxzi_(I KILLED A PRO (Hiko) 😂).mp4"
+    old = tmp_path / "013_Jynxzi_(I KILLED A PRO (Hiko) 😂).mp4"     # named the old way
     old.write_bytes(b"clip")
-    clip = {"id": "x", "broadcaster_name": "Jynxzi", "title": "I KILLED A PRO (Hiko) 😂",
-            "url": "https://clips.twitch.tv/x"}
-    job, = download.build_jobs([clip], folder, "VALORANT", start_index=21)
-    assert job.path.name == "021 Jynxzi - I KILLED A PRO (Hiko).mp4"
-    assert job.existing == old                        # not downloaded again
-    assert download.next_free_number(folder) == 14    # old style numbers still count
+    mine = tmp_path / "1 Tarik.mp4"                                   # named the new way
+    mine.write_bytes(b"clip")
+    history = _History({"t": mine})
+    jobs = download.build_jobs([_clip("t2", "Tarik"), _clip("t", "Tarik"),
+                                _clip("j", "Jynxzi", "I KILLED A PRO (Hiko) 😂")],
+                               tmp_path, "VALORANT", manifest=history)
+    assert jobs[0].existing is None                   # another Tarik clip: not the same one
+    assert jobs[1].existing == mine and jobs[1].path.name == "2 Tarik.mp4"
+    assert jobs[2].existing == old and jobs[2].path.name == "3 Jynxzi.mp4"
+    assert download.next_free_number(tmp_path) == 14  # old style numbers still count
+    assert download.renumber_existing(jobs) == 2
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["2 Tarik.mp4", "3 Jynxzi.mp4"]
+
+
+def test_a_name_held_by_another_clip_is_not_overwritten(tmp_path):
+    from clipdl import download
+    other = tmp_path / "1 Tarik.mp4"                  # a clip that left the ranking
+    other.write_bytes(b"clip")
+    job, = download.build_jobs([_clip("new", "Tarik")], tmp_path, "VALORANT",
+                               manifest=_History({"gone": other}))
+    assert job.existing is None and job.path.name == "1 Tarik (2).mp4"

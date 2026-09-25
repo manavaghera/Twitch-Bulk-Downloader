@@ -169,7 +169,7 @@ def download_plan(api, plan, fills=()):
     # A "new clips only" run sits beside files it is not touching, so its
     # numbers carry on from the last batch instead of restarting at 001.
     start_index = next_free_number(folder) if request.history_mode == "new" else 1
-    jobs = build_jobs(chosen, folder, game_name, start_index)
+    jobs = build_jobs(chosen, folder, game_name, start_index, manifest)
 
     say("")
     top = chosen[0]
@@ -304,7 +304,7 @@ def download_clips(clips, folder, output="video", short_style="blur", captions=F
         return DownloadResult(0)
     manifest = Manifest(MANIFEST_FILE)
     folder.mkdir(parents=True, exist_ok=True)
-    jobs = build_jobs(clips, folder, label, next_free_number(folder))
+    jobs = build_jobs(clips, folder, label, next_free_number(folder), manifest)
     for job, clip in zip(jobs, clips):
         job.game_name = clip.get("game_name") or label
     say("")

@@ -62,7 +62,7 @@ It runs as a web page on your own PC (Streamlit) or as two command-line tools.
   **facecam on top + gameplay below**), optional **burned-in captions** made on your PC
   (free speech to text, no API). Title ideas, a description with credit and hashtags
   (including the game's trending tags) are kept by the app and filled in when you upload -
-  the folders hold only the videos, named short (`012 Streamer - Short title.mp4`).
+  the folders hold only the videos, named just a number and the streamer (`12 Jynxzi.mp4`).
 - **Release calendar** - upcoming launches from Steam wishlists on a month calendar with
   countdowns, and an **.ics file** that puts them in Google Calendar / Outlook / iPhone
   with a reminder a few days before.

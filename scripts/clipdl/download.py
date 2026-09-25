@@ -5,12 +5,13 @@ import re
 import threading
 import time
 from concurrent.futures import as_completed
+from pathlib import Path
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
-from .config import (MAX_CONCURRENT_DOWNLOADS, MAX_HEIGHT, MAX_PATH_CHARS,
-                     POLITE_DELAY, STOP, ydl_format)
+from .config import (MAX_CONCURRENT_DOWNLOADS, MAX_HEIGHT, POLITE_DELAY, STOP,
+                     ydl_format)
 from . import timing
 from .util import describe_height, human_size, sanitize, say, short_title, thread_pool
 
@@ -30,6 +31,7 @@ class DownloadJob:
         self.created_at = clip.get("created_at", "")
         self.path = path            # where we want the .mp4
         self.existing = existing    # a matching file from an earlier run, or None
+        self.previous = None        # where the download history last put this clip
         self.game_name = game_name
         self.index = index
 
@@ -67,30 +69,20 @@ class _QuietLogger:
         self.last_error = str(message)
 
 
-def trim_for_path(folder, prefix, title, extension=".mp4"):
-    """Shorten a title so folder + file name stays under the Windows path limit."""
-    allowance = MAX_PATH_CHARS - len(str(folder)) - 1 - len(prefix) - len(extension)
-    if allowance < 8:
-        # The folder itself is already very deep; keep a token name.
-        return title[:8].rstrip(" .") or "clip"
-    return title[:allowance].rstrip(" .") or "clip"
+NAME_STREAMER, NAME_TITLE = 20, 32     # characters kept in a name / in an old name's key
+OLD_NAMES = (re.compile(r"^\d+ (.+?) - (.*)\.mp4$"),     # 12 Streamer - Title.mp4
+             re.compile(r"^\d+_(.+)_\((.*)\)\.mp4$"),    # 012_Streamer_(Title).mp4
+             re.compile(r"^\d+_(.+?)_(.*)\.mp4$"))       # 012_Streamer_Title.mp4
 
 
-NAME_STREAMER, NAME_TITLE = 20, 32     # characters of each kept in a clip's file name
-NAMES = (re.compile(r"^\d+ (.+?) - (.*)\.mp4$"),         # 012 Streamer - Title.mp4
-         re.compile(r"^\d+_(.+)_\((.*)\)\.mp4$"),        # 012_Streamer_(Title).mp4, before
-         re.compile(r"^\d+_(.+?)_(.*)\.mp4$"))             # 012_Streamer_Title.mp4, long ago
-
-
-def clip_name(index, streamer, title):
-    """A clip's file name: its number, the streamer and a short title."""
-    return "%03d %s - %s.mp4" % (index, sanitize(streamer or "unknown", NAME_STREAMER),
-                                 short_title(title or "clip", NAME_TITLE))
+def clip_name(index, streamer):
+    """A clip's file name: its number and the streamer - "12 Jynxzi.mp4"."""
+    return "%d %s.mp4" % (index, sanitize(streamer or "unknown", NAME_STREAMER))
 
 
 def clip_key(streamer, title):
-    """Streamer and short title, letters and digits only - the same for a clip
-    whatever number, or naming style, its file got."""
+    """Streamer and short title, letters and digits only: how a file named the
+    old way (with its title) is matched to a clip."""
     def plain(text):
         return "".join(ch for ch in text.lower() if ch.isalnum())
     return "%s|%s" % (plain(sanitize(streamer or "unknown", NAME_STREAMER)),
@@ -98,13 +90,14 @@ def clip_key(streamer, title):
 
 
 def name_tail(filename):
-    """The key of a clip's file name (see clip_key), used to match a rerun to a
-    file - names from before the short style still match."""
-    for pattern in NAMES:
+    """The key of a file named the old way, with its title (see clip_key) - or
+    None for a name that is only a number and a streamer: the download history
+    says which clip that one is."""
+    for pattern in OLD_NAMES:
         found = pattern.match(filename)
         if found:
             return clip_key(*found.groups())
-    return filename.lower()
+    return None
 
 
 def next_free_number(folder):
@@ -123,33 +116,58 @@ def next_free_number(folder):
     return highest + 1
 
 
-def build_jobs(clips, folder, game_name, start_index=1):
-    """Turn clips into download jobs, spotting files an earlier run already got."""
-    folder.mkdir(parents=True, exist_ok=True)
+def build_jobs(clips, folder, game_name, start_index=1, manifest=None):
+    """Turn clips into download jobs, spotting files an earlier run already got.
 
-    # Index existing .mp4 files by the streamer and title part of the name.
-    # View counts shift between runs, so the same clip can get a different rank
-    # number; matching on the part after the number makes resume reliable.
-    existing_by_tail = {}
+    Names are only a number and the streamer, so a file is known by the download
+    history (`manifest`), which records each clip's file; files named the old
+    way, with their title, are also matched by name. View counts shift between
+    runs, so a clip can get a different number: renumber_existing() moves it.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    files = {}
     for path in folder.glob("*.mp4"):
         try:
-            if path.stat().st_size == 0:
-                continue  # empty leftover from an interrupted run
+            if path.stat().st_size > 0:     # not an empty leftover of an interrupted run
+                files[path.name] = path
         except OSError:
             continue
-        existing_by_tail.setdefault(name_tail(path.name), path)
-    # Note: each existing file is claimed by at most one job (see pop below), so
-    # two clips that sanitize to the same name cannot both count as "already have".
+    by_key = {}
+    for path in files.values():
+        key = name_tail(path.name)
+        if key:
+            by_key.setdefault(key, path)
+    recorded = (manifest.data.get("clips") or {}) if manifest is not None else {}
 
-    jobs = []
+    jobs, claimed = [], set()
     for index, clip in enumerate(clips, start_index):
-        streamer, title = clip.get("broadcaster_name"), clip.get("title")
-        filename = clip_name(index, streamer, title)
-        prefix = filename.split(" - ", 1)[0] + " - "
-        filename = prefix + trim_for_path(folder, prefix, filename[len(prefix):-4]) + ".mp4"
-        tail = clip_key(streamer, title)
-        jobs.append(DownloadJob(clip, folder / filename, existing_by_tail.pop(tail, None),
-                                game_name, index))
+        streamer = clip.get("broadcaster_name")
+        earlier = None
+        entry = recorded.get(clip.get("id") or "")
+        if entry and entry.get("file"):
+            before = Path(entry["file"])
+            if before.parent.resolve() == folder.resolve() and before.name in files:
+                earlier = files[before.name]
+        if earlier is None:
+            earlier = by_key.get(clip_key(streamer, clip.get("title")))
+        if earlier in claimed:              # each file belongs to one clip
+            earlier = None
+        if earlier is not None:
+            claimed.add(earlier)
+        job = DownloadJob(clip, folder / clip_name(index, streamer), earlier, game_name, index)
+        job.previous = Path(entry["file"]) if entry and entry.get("file") else None
+        jobs.append(job)
+    # A name still held by a file no clip of this run owns (a clip that left the
+    # ranking) is not overwritten: this clip gets "12 Jynxzi (2).mp4".
+    kept = {name for name, path in files.items() if path not in claimed}
+    taken = set()
+    for job in jobs:
+        name, number = job.path.name, 1
+        while (name in kept and job.existing != files.get(name)) or name in taken:
+            number += 1
+            name = "%s (%d).mp4" % (job.path.stem, number)
+        taken.add(name)
+        job.path = folder / name
     return jobs
 
 

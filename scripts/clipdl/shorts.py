@@ -32,7 +32,7 @@ from pathlib import Path
 
 from . import branding, captions, facecams, media, timing
 from .config import STOP
-from .download import name_tail
+from .download import clip_key, name_tail
 from .util import say, thread_pool
 
 WIDTH, HEIGHT = 1080, 1920
@@ -163,8 +163,9 @@ def _existing_shorts(folder):
     """{name tail: path} for Shorts already made, so a clip is never converted twice."""
     found = {}
     for path in (folder / SHORTS_FOLDER).glob("*.mp4"):
-        if not path.name.endswith(".part.mp4"):
-            found.setdefault(name_tail(path.name), path)
+        key = name_tail(path.name)
+        if key and not path.name.endswith(".part.mp4"):
+            found.setdefault(key, path)
     return found
 
 
@@ -207,15 +208,33 @@ def convert_all(jobs, manifest, output, style, workers=None, with_captions=False
     folder = landed[0].path.parent
     made_before = _existing_shorts(folder)
 
-    todo = []
+    moves = []
     for job in landed:
         job.short = short_path(job.path)
-        earlier = made_before.get(name_tail(job.path.name))
-        if earlier is not None and earlier != job.short:
-            try:                # renumber it to match today's ranking, like the videos
-                earlier.replace(job.short)
-            except OSError:
-                job.short = earlier
+        earlier = short_path(job.previous) if getattr(job, "previous", None) else None
+        if earlier is None or not earlier.exists():
+            earlier = made_before.get(clip_key(job.streamer, job.title))
+        if earlier is not None and earlier.exists() and earlier != job.short:
+            moves.append((job, earlier))
+    # Renumbered to match today's ranking, like the videos - through a temporary
+    # name first, since two Shorts can swap numbers.
+    staged = []
+    for job, earlier in moves:
+        try:
+            temp = earlier.with_name(earlier.name + ".renaming")
+            earlier.rename(temp)
+            staged.append((job, temp, earlier))
+        except OSError:
+            job.short = earlier
+    for job, temp, earlier in staged:
+        try:
+            temp.replace(job.short)
+        except OSError:
+            temp.rename(earlier)
+            job.short = earlier
+
+    todo = []
+    for job in landed:
         if job.short.exists():
             continue
         source = job.existing if job.existing and job.existing.exists() else job.path
